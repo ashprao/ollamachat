@@ -1,14 +1,18 @@
-# GoChatLLM
+# OllamaChat
 
 ## Introduction
 
-GoChatLLM is a Go application that demonstrates how to interact with a Local Language Model (LLM) server. This application showcases handling streaming responses efficiently using Go's concurrency model and manages request cancellations using the `context` package. The user interface is built with the Fyne framework.
+ollamachat is a Go application that demonstrates how to interact with a Local Language Model (LLM) server. This application showcases handling streaming responses efficiently using Go's concurrency model and manages request cancellations using the `context` package. The user interface is built with the Fyne framework.
+
+## Acknowledgments
+
+Shout out to [Fyne](https://fyne.io/) for providing a powerful and intuitive GUI library that simplifies our development process. This project is made possible by the contributions of the Fyne community, and their efforts in creating an excellent and promising framework is appreciated.
 
 ## Setup Instructions
 
 1. **Install Go**: Ensure you have Go installed. You can download it from [the official website](https://golang.org/dl/).
 2. **Build the Project**: Navigate to the project directory in your terminal and execute `go build` to compile the code and produce an executable.
-3. **Run the Program**: Use `./gochatllm` to start the application.
+3. **Run the Program**: Use `./ollamachat` to start the application.
 
 ## Usage
 
@@ -117,3 +121,4 @@ For model selection, the drop-down widget dynamically sizes to fit the longest m
 ## License
 
 This project is released under the MIT License. Please refer to the `LICENSE` file for more details.
+

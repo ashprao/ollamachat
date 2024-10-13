@@ -94,8 +94,8 @@ func (c *ChatApp) Run() {
 	c.myWindow.ShowAndRun()
 }
 
-func fetchModels() ([]Model, error) {
-	resp, err := http.Get("http://localhost:11434/api/tags")
+func fetchModels(client *http.Client) ([]Model, error) {
+	resp, err := client.Get("http://localhost:11434/api/tags")
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +156,8 @@ func sendQueryToLLM(ctx context.Context, model, query string, updateStatus func(
 }
 
 func (c *ChatApp) SetupModelSelection() {
-	models, err := fetchModels()
+	client := &http.Client{}
+	models, err := fetchModels(client)
 	if err != nil {
 		dialog.ShowError(err, c.myWindow)
 		return
