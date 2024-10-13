@@ -1,0 +1,43 @@
+# Binaries for programs and plugins
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Fyne build artifacts
+fyne-cross
+dist/
+
+# IDE/editor configurations
+/.idea/
+/.vscode/
+*.sublime-workspace
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Other files should be ignored as well
+*.log
+*.tmp
+*.swp
+*~
+
+# Module download cache
+/go/pkg/mod/
+
+# Dependency files in the vendor directory
+vendor/
+
+# Specific for Fyne if using fyne-cross
+fyne-cross/
