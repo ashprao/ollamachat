@@ -11,8 +11,37 @@ Shout out to [Fyne](https://fyne.io/) for providing a powerful and intuitive GUI
 ## Setup Instructions
 
 1. **Install Go**: Ensure you have Go installed. You can download it from [the official website](https://golang.org/dl/).
-2. **Build the Project**: Navigate to the project directory in your terminal and execute `go build` to compile the code and produce an executable.
-3. **Run the Program**: Use `./ollamachat` to start the application.
+2. **Install Docker**: `fyne-cross` requires Docker to be available on your system. You can download Docker from [the official website](https://www.docker.com/products/docker-desktop).
+3. **Build the Project**: Navigate to the project directory in your terminal and execute `go build` to compile the code and produce an executable.
+4. **Run the Program**: Use `./ollamachat` to start the application.
+
+### Using the Makefile
+
+A Makefile is provided to simplify the build process. It utilizes `fyne-cross` to build the project for multiple platforms. You can use the following command to build all targets:
+
+```bash
+make all
+```
+
+This command will execute all the necessary steps to build the project, ensuring that all dependencies are handled correctly.
+
+#### Building for Specific Platforms
+
+To build binaries for all architectures of a specific platform, use the `platform` target. Set the `PLATFORM` variable to the desired platform:
+
+```bash
+make platform PLATFORM=linux
+```
+
+#### Building for Specific Platform and Architecture
+
+To build a binary for a specific platform and architecture combination, use the `platform-arch` target. Set both the `PLATFORM` and `ARCH` variables:
+
+```bash
+make platform-arch PLATFORM=linux ARCH=amd64
+```
+
+For more information about `fyne-cross`, visit the [fyne-cross GitHub repository](https://github.com/fyne-io/fyne-cross).
 
 ## Usage
 
@@ -121,4 +150,3 @@ For model selection, the drop-down widget dynamically sizes to fit the longest m
 ## License
 
 This project is released under the MIT License. Please refer to the `LICENSE` file for more details.
-
