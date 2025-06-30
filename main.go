@@ -50,7 +50,6 @@ type ChatApp struct {
 
 func main() {
 	app := NewChatApp()
-	app.SetupModelSelection() // Move this up to ensure the modelSelect is initialized
 	app.SetupUI()
 	app.Run()
 }
@@ -165,11 +164,19 @@ func (c *ChatApp) SetupUI() {
 }
 
 func (c *ChatApp) Run() {
+	// Show the window first to establish proper sizing for dialogs
+	c.myWindow.Show()
+
+	// Now check for loading errors after window is shown
 	if err := c.LoadChatHistory(); err != nil {
 		dialog.ShowError(err, c.myWindow)
 	}
 
-	c.myWindow.ShowAndRun()
+	// Set up model selection after window is shown
+	c.SetupModelSelection()
+
+	// Use Run() instead of ShowAndRun() since we already called Show()
+	c.myApp.Run()
 }
 
 func fetchModels(client *http.Client) ([]Model, error) {
@@ -242,10 +249,17 @@ func (c *ChatApp) SetupModelSelection() {
 	}
 
 	modelNames := c.extractModelNames(models)
-	c.modelSelect = widget.NewSelect(modelNames, c.onModelSelect)
+
+	// Update the existing modelSelect widget instead of creating a new one
+	c.modelSelect.Options = modelNames
+	c.modelSelect.OnChanged = c.onModelSelect
+	c.modelSelect.Refresh()
 
 	savedModel := c.myApp.Preferences().StringWithFallback("selectedModel", "llama3.2:latest")
 	c.modelSelect.SetSelected(savedModel)
+
+	// Refresh the parent container to ensure the updated modelSelect is displayed
+	c.myWindow.Content().Refresh()
 }
 
 func (c *ChatApp) initButtons() {
