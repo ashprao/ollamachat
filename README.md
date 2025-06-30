@@ -12,8 +12,15 @@ Shout out to [Fyne](https://fyne.io/) for providing a powerful and intuitive GUI
 
 1. **Install Go**: Ensure you have Go installed. You can download it from [the official website](https://golang.org/dl/).
 2. **Install Docker**: `fyne-cross` requires Docker to be available on your system. You can download Docker from [the official website](https://www.docker.com/products/docker-desktop).
-3. **Build the Project**: Navigate to the project directory in your terminal and execute `go build` to compile the code and produce an executable.
-4. **Run the Program**: Use `./ollamachat` to start the application.
+3. **Install fyne-cross**: Install `fyne-cross` by running:
+
+   ```bash
+   go install github.com/fyne-io/fyne-cross@latest
+   ```
+   Ensure that your Go bin directory (usually `$HOME/go/bin`) is in your `PATH` so you can run `fyne-cross` from the terminal.
+
+4. **Build the Project**: Navigate to the project directory in your terminal and execute `go build` to compile the code and produce an executable.
+5. **Run the Program**: Use `./ollamachat` to start the application.
 
 ### Using the Makefile
 
@@ -50,6 +57,9 @@ For more information about `fyne-cross`, visit the [fyne-cross GitHub repository
 3. **Select a Model**: Users can select a model from a dropdown to determine which model the LLM server will use for query processing.
 4. **Submit a Query**: Type a query into the text field and send it to the LLM.
 5. **Receive Streaming Response**: The application processes the LLM's streaming responses and updates the UI in real-time.
+6. **Persistent Chat History**: Chat history is automatically saved and restored between sessions. Clearing the chat will also clear the saved history.
+7. **Context Window for LLM**: The LLM receives previous messages as context (not just the latest message). By default, only the last 10 messages are sent for context.
+8. **Export Chat**: Use the "Save" button to export the conversation as plain text, using the original message content.
 
 ## Concurrency
 
