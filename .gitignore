@@ -14,8 +14,12 @@
 go.work
 go.work.sum
 
+# Development build binaries (root directory only)
+/ollamachat
+/ollamachat.exe
+
 # Fyne build artifacts
-fyne-cross
+fyne-cross/
 dist/
 
 # IDE/editor configurations
@@ -38,7 +42,3 @@ Thumbs.db
 
 # Dependency files in the vendor directory
 vendor/
-
-# Specific for Fyne if using fyne-cross
-fyne-cross/
-ollamachat

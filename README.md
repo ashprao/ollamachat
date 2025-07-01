@@ -2,7 +2,9 @@
 
 ## Introduction
 
-ollamachat is a Go application that demonstrates how to interact with a Local Language Model (LLM) server. This application showcases handling streaming responses efficiently using Go's concurrency model and manages request cancellations using the `context` package. The user interface is built with the Fyne framework.
+OllamaChat is a modular Go application built with industry-standard architecture patterns for interacting with Local Language Model (LLM) servers. The application features a clean separation of concerns with dependency injection, structured logging, configuration management, and extensible provider abstractions. It demonstrates efficient streaming response handling using Go's concurrency model and provides a responsive user interface built with the Fyne framework.
+
+The application is designed with future extensibility in mind, providing a foundation for advanced features like Model Context Protocol (MCP) client/server support, agentic frameworks, and multi-provider LLM integration.
 
 ## Acknowledgments
 
@@ -19,18 +21,46 @@ Shout out to [Fyne](https://fyne.io/) for providing a powerful and intuitive GUI
    ```
    Ensure that your Go bin directory (usually `$HOME/go/bin`) is in your `PATH` so you can run `fyne-cross` from the terminal.
 
-4. **Build the Project**: Navigate to the project directory in your terminal and execute `go build` to compile the code and produce an executable.
+4. **Build the Project**: Navigate to the project directory in your terminal and use one of the following methods:
+   
+   **Option 1 - Quick development build using Makefile:**
+   ```bash
+   make build
+   ```
+   
+   **Option 2 - Manual build:**
+   ```bash
+   go build -o ollamachat cmd/ollamachat/main.go
+   ```
+   Or simply:
+   ```bash
+   go build
+   ```
 5. **Run the Program**: Use `./ollamachat` to start the application.
 
 ### Using the Makefile
 
-A Makefile is provided to simplify the build process. It utilizes `fyne-cross` to build the project for multiple platforms. You can use the following command to build all targets:
+A Makefile is provided to simplify the build process. It utilizes `fyne-cross` to build the project for multiple platforms.
+
+#### Quick Development Build
+
+For rapid development and testing, use the `build` target to create a local binary:
+
+```bash
+make build
+```
+
+This creates a `./ollamachat` executable for your current platform without packaging.
+
+#### Complete Multi-Platform Build
+
+To build all targets for all platforms, use:
 
 ```bash
 make all
 ```
 
-This command will execute all the necessary steps to build the project, ensuring that all dependencies are handled correctly.
+This command will execute all the necessary steps to build the project for all supported platforms, ensuring that all dependencies are handled correctly.
 
 #### Building for Specific Platforms
 
@@ -48,7 +78,115 @@ To build a binary for a specific platform and architecture combination, use the 
 make platform-arch PLATFORM=linux ARCH=amd64
 ```
 
+#### Available Makefile Targets
+
+- **`make build`**: Quick development build for current platform
+- **`make all`**: Build for all platforms (requires Docker for cross-compilation)
+- **`make darwin-arm64`**: Build and package for macOS ARM64 (native builds)
+- **`make darwin-amd64`**: Build for macOS Intel (with compatibility notes)
+- **`make windows`**: Build for Windows (all architectures)
+- **`make linux`**: Build for Linux (all architectures)
+- **`make clean`**: Remove all build artifacts
+
 For more information about `fyne-cross`, visit the [fyne-cross GitHub repository](https://github.com/fyne-io/fyne-cross).
+
+## Project Structure
+
+OllamaChat follows Go's standard project layout with a modular architecture:
+
+```
+ollamachat/
+├── cmd/ollamachat/          # Application entry point
+│   └── main.go             # Main executable
+├── internal/               # Private application code
+│   ├── app/               # Application container and dependency injection
+│   ├── config/            # Configuration management
+│   ├── llm/               # LLM provider abstractions and implementations
+│   ├── models/            # Data models and structures
+│   ├── storage/           # Storage abstractions and implementations
+│   └── ui/                # User interface components
+├── pkg/                   # Public libraries
+│   └── logger/            # Structured logging
+├── configs/               # Configuration files
+│   └── config.yaml        # Application configuration
+├── data/                  # Application data directory
+│   ├── preferences.json   # User preferences
+│   └── sessions/          # Chat session storage (future)
+└── fyne-cross/           # Cross-compilation artifacts
+```
+
+### Data Directory Structure
+
+The `data/` directory contains all persistent application data:
+
+- **`preferences.json`**: Stores user preferences including window size, theme, font settings, and feature flags
+- **`sessions/`**: Future directory for individual chat session files (*.json)
+- **Legacy compatibility**: The application maintains backward compatibility with existing `chat_history.json` files stored in Fyne's app storage
+
+The application automatically creates the data directory and required files on first run.
+
+## Configuration
+
+The application uses a YAML configuration file (`configs/config.yaml`) for centralized settings management:
+
+```yaml
+app:
+  name: "OllamaChat"
+  version: "1.0.0"
+  log_level: "info"
+
+llm:
+  providers:
+    - name: "ollama"
+      type: "ollama"
+      base_url: "http://localhost:11434"
+      timeout: 30
+      enabled: true
+  default_provider: "ollama"
+
+storage:
+  type: "file"
+  base_path: "data"
+
+ui:
+  theme: "auto"
+  window:
+    width: 600
+    height: 700
+  font_size: 12
+```
+
+Configuration can be modified by editing the YAML file or through the application preferences (stored in `data/preferences.json`).
+
+## Future Capabilities & Extensibility
+
+The application architecture is designed to support advanced features planned for future releases:
+
+### Model Context Protocol (MCP) Support
+- **MCP Client**: Ready for integration with MCP servers for enhanced tool capabilities
+- **MCP Server**: Framework in place to run as an MCP server itself
+- **Data Models**: `internal/models/mcp.go` contains MCP-specific data structures
+
+### Agentic Framework Integration
+- **Agent Configuration**: Support for multiple agentic frameworks (Eino, AutoGen, etc.)
+- **Tool Integration**: Built-in and MCP-provided tools
+- **Concurrent Execution**: Multi-agent workflow support
+
+### Multi-Provider LLM Support
+- **Provider Abstraction**: `internal/llm/provider.go` defines interfaces for multiple LLM providers
+- **Extensible Design**: Easy addition of new providers (OpenAI, Anthropic, Cohere, etc.)
+- **Provider Switching**: Runtime provider selection capability
+
+### Session Management
+- **Multi-Session Support**: Framework for managing multiple chat sessions
+- **Session Persistence**: Individual session storage in `data/sessions/`
+- **Session Import/Export**: Planned support for session sharing
+
+### Advanced Features
+- **Structured Logging**: Comprehensive logging with configurable levels
+- **Configuration Management**: Hot-reload configuration changes
+- **Plugin Architecture**: Extensible component system
+- **API Server Mode**: Future REST API capabilities
 
 ## Usage
 
@@ -61,101 +199,134 @@ For more information about `fyne-cross`, visit the [fyne-cross GitHub repository
 7. **Context Window for LLM**: The LLM receives previous messages as context (not just the latest message). By default, only the last 10 messages are sent for context.
 8. **Export Chat**: Use the "Save" button to export the conversation as plain text, using the original message content.
 
-## Concurrency
+## Architecture & Implementation
+
+### Modular Design
+
+The application follows clean architecture principles with clear separation of concerns:
+
+- **Dependency Injection**: The `internal/app` package provides a container that manages all dependencies
+- **Interface Abstractions**: Storage and LLM providers are defined through interfaces for easy testing and extension
+- **Structured Logging**: Contextual logging with component identification throughout the application
+- **Configuration Management**: Centralized configuration with validation and environment support
+
+### Concurrency
 
 For efficient execution and a responsive UI, the application leverages Go's concurrency features:
 
-- **Goroutines for Long Operations**: Queries to the LLM are sent using goroutines. This prevents the main UI thread from blocking.
+- **Goroutines for Long Operations**: LLM queries are executed in separate goroutines to prevent UI blocking
 
   ```go
-  go c.sendMessageToLLM(ctx, selectedModel, query, scrollContainer)
+  go ui.sendMessageToLLM(ctx, selectedModel, fullPrompt)
   ```
 
-- **Context for Request Cancellation**: The context package is utilized to allow for user-initiated request cancelation.
+- **Context for Request Cancellation**: The context package enables user-initiated request cancellation
 
   ```go
   ctx, cancelFunc := context.WithCancel(context.Background())
+  ui.cancelFunc = cancelFunc
   ```
 
-## Streaming Responses
+- **Thread-Safe Operations**: All UI updates and data operations are properly synchronized
 
-The application handles streaming responses from the LLM to deliver real-time interactions:
+### Streaming Responses
 
-- **Incremental JSON Decoding**: The `json.Decoder` is used to parse JSON responses incrementally as they're received, allowing the UI to update dynamically.
+The application handles streaming responses from the LLM through the provider abstraction:
+
+- **Provider Interface**: The `llm.Provider` interface abstracts streaming response handling
 
   ```go
-  decoder := json.NewDecoder(resp.Body)
+  err := provider.SendQuery(ctx, model, prompt, func(chunk string, newStream bool) {
+      // Handle streaming response chunks
+      if newStream {
+          // Start new response
+          llmResponse = chunk
+      } else {
+          // Append to existing response
+          llmResponse += chunk
+      }
+      // Update UI dynamically
+  })
   ```
 
-- **Response Handling Loop**: Continuously processes incoming JSON objects to update the chat UI with the LLM's responses.
+- **Real-time UI Updates**: The UI components update incrementally as response chunks arrive
+- **Auto-scrolling**: Smart scroll behavior maintains user focus during long responses
+
+### Context Handling & Cancellation
+
+The application uses Go's context package for efficient request lifecycle management:
+
+- **Cancellation Support**: Users can cancel ongoing requests through the UI
 
   ```go
-  for {
-      var llmResp map[string]interface{}
-      if err := decoder.Decode(&llmResp); errors.Is(err, io.EOF) {
-          break
-      } else if err != nil {
-          return err
-      }
-
-      if responseText, ok := llmResp["response"].(string); ok {
-          updateChat(responseText, newStream)
-          newStream = false
-      }
+  if ui.cancelFunc != nil {
+      ui.cancelFunc()
+      // Request is cancelled and UI is updated
   }
   ```
 
-## Context Handling
-
-Utilize the context package to manage request life cycles efficiently:
-
-- **Cancellation**: Users can cancel ongoing requests through a cancel button in the UI.
-
-  ```go
-  cancelButton.OnTapped = func() {
-      if c.cancelFunc != nil {
-          c.cancelFunc()
-          addMessageCard("\n\n**Request canceled**", false)
-      }
-  }
-  ```
+- **Timeout Management**: Configurable timeouts for LLM requests
+- **Resource Cleanup**: Proper cleanup of resources when requests are cancelled or complete
 
 ## User Interface
 
-### Drop-Down Width Configuration
+The UI is implemented in the `internal/ui` package with modular, reusable components:
 
-For model selection, the drop-down widget dynamically sizes to fit the longest model name:
+### Component Architecture
 
-- **Determine Longest Model Name**: The app iterates through model names to find the longest one.
+- **ChatUI**: Main chat interface with dependency injection
+- **Reusable Components**: Shared UI components in `internal/ui/components.go`
+- **Responsive Design**: Dynamic sizing and adaptive layouts
 
-  ```go
-  longestModel := ""
-  for _, model := range c.modelSelect.Options {
-      if len(model) > len(longestModel) {
-          longestModel = model
-      }
-  }
-  ```
+### Model Selection
 
-- **Set Minimum Width**: The width of the drop-down is set using the size of the longest model name plus extra padding for better readability.
+The model dropdown dynamically sizes to accommodate the longest model name:
 
-  ```go
-  textSize := canvas.NewText(longestModel, nil).MinSize()
-  modelSelectContainer := container.NewGridWrap(fyne.NewSize(textSize.Width+50, c.modelSelect.MinSize().Height), c.modelSelect)
-  ```
+```go
+func (ui *ChatUI) calculateModelSelectWidth() float32 {
+    longestModel := ""
+    for _, model := range ui.modelSelect.Options {
+        if len(model) > len(longestModel) {
+            longestModel = model
+        }
+    }
+    return canvas.NewText(longestModel, nil).MinSize().Width
+}
+```
 
-  The `+50` padding ensures the drop-down accommodates extra UI elements while avoiding cramped text, enhancing user interface aesthetics.
+### Message Display
+
+- **Rich Text Support**: Markdown rendering for formatted messages
+- **User/LLM Distinction**: Clear visual separation between user and assistant messages
+- **Auto-scrolling**: Smart scroll behavior during streaming responses
 
 ## Troubleshooting
 
-- **LLM Not Responding**: Consider increasing the context timeout.
-- **Invalid JSON Response**: Verify LLM logs to diagnose errors in the response.
+- **LLM Not Responding**: Check the provider configuration in `configs/config.yaml` and ensure the LLM server is running
+- **Configuration Issues**: Verify the YAML syntax in `configs/config.yaml` and check application logs
+- **Storage Issues**: Ensure the `data/` directory is writable and has sufficient space
+- **Build Issues**: Ensure Go version compatibility and all dependencies are available
+- **UI Issues**: Check display scaling and window manager compatibility
+
+### Logging
+
+The application provides structured logging with configurable levels. Set the log level in `configs/config.yaml`:
+
+```yaml
+app:
+  log_level: "debug"  # debug, info, warn, error
+```
+
+Logs include component identification to help with debugging specific parts of the application.
 
 ## References
 
-- "The Go Programming Language" by Brian Kernighan and Al Aho
-- "HTTP in Go" by Miek Gieben and Jelle van der Velden
-- "Context package documentation" by Rob Pike
+- [Go Project Layout](https://github.com/golang-standards/project-layout) - Standard Go project structure
+- [Clean Architecture in Go](https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html) - Architectural principles
+- [Fyne Framework Documentation](https://fyne.io/) - GUI framework
+- [Model Context Protocol](https://modelcontextprotocol.io/) - Future MCP integration
+- "The Go Programming Language" by Brian Kernighan and Alan Donovan
+- "Clean Architecture" by Robert C. Martin
 
 ## License
 
