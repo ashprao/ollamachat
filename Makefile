@@ -10,6 +10,12 @@ DARWIN_CROSS_ARCH = amd64
 # Default target - clean and build for all platforms including host
 all: clean cross-platform darwin-amd64 darwin-arm64
 
+# Quick development build (local platform only)
+build:
+	@echo "Building for development (local platform)..."
+	go build -o ollamachat cmd/ollamachat/main.go
+	@echo "Build complete: ./ollamachat"
+
 # Darwin ARM64 target (local host system)
 darwin-arm64:
 	@echo "Building for Darwin ARM64 (host system)..."
@@ -17,7 +23,7 @@ darwin-arm64:
 	@rm -rf $(HOST_OUTPUT_DIR)
 	@mkdir -p $(HOST_OUTPUT_DIR)
 	@echo "Building binary..."
-	go build -o $(HOST_OUTPUT_DIR)/ollamachat
+	go build -o $(HOST_OUTPUT_DIR)/ollamachat cmd/ollamachat/main.go
 	@echo "Packaging app..."
 	fyne package -os darwin --app-id $(APP_ID) --exe $(HOST_OUTPUT_DIR)/ollamachat
 	@echo "Moving app to correct location..."
@@ -52,7 +58,7 @@ darwin-amd64-manual:
 			--app-version "1.0.0" \
 			--app-build 1 \
 			--icon ../../../Icon.png \
-			../../../ || \
+			../../../cmd/ollamachat/main.go || \
 		echo "❌ Manual build failed - OpenGL cross-compilation not supported"; \
 	else \
 		echo "❌ Fyne CLI not found. Install with: go install fyne.io/fyne/v2/cmd/fyne@latest"; \
@@ -66,7 +72,7 @@ cross-platform:
 			echo "Cleaning $$platform/$$arch build directory..."; \
 			rm -rf fyne-cross/dist/$$platform-$$arch; \
 			echo "Building $$platform/$$arch..."; \
-			fyne-cross $$platform -arch $$arch --app-id $(APP_ID); \
+			fyne-cross $$platform -arch $$arch --app-id $(APP_ID) ./cmd/ollamachat; \
 		done; \
 	done
 
@@ -77,7 +83,7 @@ windows:
 		echo "Cleaning Windows/$$arch build directory..."; \
 		rm -rf fyne-cross/dist/windows-$$arch; \
 		echo "Building Windows/$$arch..."; \
-		fyne-cross windows -arch $$arch --app-id $(APP_ID); \
+		fyne-cross windows -arch $$arch --app-id $(APP_ID) ./cmd/ollamachat; \
 	done
 
 linux:
@@ -86,7 +92,7 @@ linux:
 		echo "Cleaning Linux/$$arch build directory..."; \
 		rm -rf fyne-cross/dist/linux-$$arch; \
 		echo "Building Linux/$$arch..."; \
-		fyne-cross linux -arch $$arch --app-id $(APP_ID); \
+		fyne-cross linux -arch $$arch --app-id $(APP_ID) ./cmd/ollamachat; \
 	done
 
 # Platform-specific target
@@ -96,7 +102,7 @@ platform:
 		exit 1; \
 	fi; \
 	for arch in $(ARCHITECTURES); do \
-		fyne-cross $(PLATFORM) -arch $$arch --app-id $(APP_ID); \
+		fyne-cross $(PLATFORM) -arch $$arch --app-id $(APP_ID) ./cmd/ollamachat; \
 	done
 
 # Platform-architecture-specific target
@@ -105,10 +111,10 @@ platform-arch:
 		echo "Error: PLATFORM and ARCH variables must be set"; \
 		exit 1; \
 	fi; \
-	fyne-cross $(PLATFORM) -arch $(ARCH) --app-id $(APP_ID)
+	fyne-cross $(PLATFORM) -arch $(ARCH) --app-id $(APP_ID) ./cmd/ollamachat
 
 # Clean target
 clean:
 	rm -rf fyne-cross
 
-.PHONY: all clean platform platform-arch darwin-arm64 darwin-amd64 darwin-amd64-manual cross-platform windows linux
+.PHONY: all build clean platform platform-arch darwin-arm64 darwin-amd64 darwin-amd64-manual cross-platform windows linux

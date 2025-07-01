@@ -1,0 +1,44 @@
+app:
+  name: "OllamaChat"
+  version: "1.0.0"
+  log_level: "info"
+
+llm:
+  provider: "ollama"  # "ollama", "openai", "eino"
+  ollama:
+    base_url: "http://localhost:11434"
+    default_model: "llama3.2:latest"
+  openai:
+    base_url: "https://api.openai.com/v1"
+    default_model: "gpt-3.5-turbo"
+    # api_key: ""  # Set via OPENAI_API_KEY environment variable
+  eino:
+    default_model: "llama3.2:latest"
+    settings: {}
+  settings:
+    timeout_seconds: 30
+    max_tokens: 2048
+
+ui:
+  window_width: 600
+  window_height: 700
+  max_messages: 10
+
+mcp:
+  enabled: false
+  servers: []
+    # Example MCP server configuration:
+    # - name: "filesystem"
+    #   command: "npx"
+    #   args: ["@modelcontextprotocol/server-filesystem", "/path/to/allowed/directory"]
+    #   env:
+    #     NODE_ENV: "production"
+    #   enabled: true
+
+agent:
+  enabled: false
+  framework: "eino"  # "eino", "custom"
+  default_agent: "chat_agent"
+  settings:
+    max_iterations: 10
+    timeout: "30s"

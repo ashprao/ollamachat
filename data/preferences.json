@@ -1,0 +1,17 @@
+{
+  "window_width": 600,
+  "window_height": 700,
+  "theme": "auto",
+  "font_size": 12,
+  "max_history_length": 100,
+  "default_model": "gemma3:4b-it-qat",
+  "default_provider": "ollama",
+  "auto_save_history": true,
+  "enable_markdown": true,
+  "show_timestamps": false,
+  "max_context_length": 10,
+  "enable_tool_calling": false,
+  "enable_mcp_servers": false,
+  "enable_agents": false,
+  "log_level": "info"
+}
