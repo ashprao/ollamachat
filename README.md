@@ -6,6 +6,12 @@ OllamaChat is a modular Go application built with industry-standard architecture
 
 The application is designed with future extensibility in mind, providing a foundation for advanced features like Model Context Protocol (MCP) client/server support, agentic frameworks, and multi-provider LLM integration.
 
+## Screenshot
+
+![OllamaChat Interface](screenshot.png)
+
+*OllamaChat running on macOS showing the clean, intuitive interface with model selection, streaming responses, and persistent chat history.*
+
 ## Acknowledgments
 
 Shout out to [Fyne](https://fyne.io/) for providing a powerful and intuitive GUI library that simplifies our development process. This project is made possible by the contributions of the Fyne community, and their efforts in creating an excellent and promising framework is appreciated.
