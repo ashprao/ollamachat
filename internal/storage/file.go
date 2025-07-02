@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/storage"
 
 	"github.com/ashprao/ollamachat/internal/models"
 	"github.com/ashprao/ollamachat/pkg/logger"
@@ -48,12 +48,7 @@ func NewFileStorage(basePath string, app fyne.App, logger *logger.Logger) (*File
 func (fs *FileStorage) SaveChatSession(ctx context.Context, session models.ChatSession) error {
 	fs.logger.Info("Saving chat session", "session_id", session.ID, "message_count", len(session.Messages))
 
-	// For backward compatibility, if this is the "default" session, save to legacy location
-	if session.ID == "default" || session.ID == "" {
-		return fs.saveLegacyChatHistory(session.Messages)
-	}
-
-	// Save to new session-based structure
+	// Save to session-based structure
 	sessionPath := filepath.Join(fs.basePath, "sessions", fmt.Sprintf("%s.json", session.ID))
 	if err := os.MkdirAll(filepath.Dir(sessionPath), 0755); err != nil {
 		fs.logger.Error("Failed to create sessions directory", "error", err)
@@ -82,21 +77,6 @@ func (fs *FileStorage) SaveChatSession(ctx context.Context, session models.ChatS
 func (fs *FileStorage) LoadChatSession(ctx context.Context, sessionID string) (models.ChatSession, error) {
 	fs.logger.Info("Loading chat session", "session_id", sessionID)
 
-	// For backward compatibility, try to load legacy format first
-	if sessionID == "default" || sessionID == "" {
-		messages, err := fs.loadLegacyChatHistory()
-		if err != nil {
-			fs.logger.Error("Failed to load legacy chat history", "error", err)
-			return models.ChatSession{}, err
-		}
-
-		// Convert legacy messages to new session format
-		session := models.NewChatSession("Default Session", "")
-		session.ID = "default"
-		session.Messages = messages
-		return session, nil
-	}
-
 	sessionPath := filepath.Join(fs.basePath, "sessions", fmt.Sprintf("%s.json", sessionID))
 	data, err := os.ReadFile(sessionPath)
 	if err != nil {
@@ -122,26 +102,23 @@ func (fs *FileStorage) LoadChatSession(ctx context.Context, sessionID string) (m
 func (fs *FileStorage) ListChatSessions(ctx context.Context) ([]models.ChatSession, error) {
 	fs.logger.Info("Listing chat sessions")
 
+	var sessions []models.ChatSession
+
+	// Check for session-based storage
 	sessionsDir := filepath.Join(fs.basePath, "sessions")
 	if _, err := os.Stat(sessionsDir); os.IsNotExist(err) {
-		// Check for legacy chat history and create default session if exists
-		if messages, err := fs.loadLegacyChatHistory(); err == nil && len(messages) > 0 {
-			defaultSession := models.NewChatSession("Default Session", "")
-			defaultSession.ID = "default"
-			defaultSession.Messages = messages
-			fs.logger.Info("Found legacy chat history, returning as default session")
-			return []models.ChatSession{defaultSession}, nil
-		}
-		return []models.ChatSession{}, nil
+		// No sessions directory, return empty list
+		fs.logger.Info("No sessions directory found, returning empty list")
+		return sessions, nil
 	}
 
 	entries, err := os.ReadDir(sessionsDir)
 	if err != nil {
 		fs.logger.Error("Failed to read sessions directory", "error", err)
-		return nil, fmt.Errorf("failed to read sessions directory: %w", err)
+		return sessions, fmt.Errorf("failed to read sessions directory: %w", err)
 	}
 
-	var sessions []models.ChatSession
+	// Load all sessions from the sessions directory
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -157,6 +134,11 @@ func (fs *FileStorage) ListChatSessions(ctx context.Context) ([]models.ChatSessi
 		sessions = append(sessions, session)
 	}
 
+	// Sort sessions by updated time (most recent first)
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
+	})
+
 	fs.logger.Info("Successfully listed chat sessions", "count", len(sessions))
 	return sessions, nil
 }
@@ -164,11 +146,6 @@ func (fs *FileStorage) ListChatSessions(ctx context.Context) ([]models.ChatSessi
 // DeleteChatSession deletes a chat session
 func (fs *FileStorage) DeleteChatSession(ctx context.Context, sessionID string) error {
 	fs.logger.Info("Deleting chat session", "session_id", sessionID)
-
-	if sessionID == "default" {
-		fs.logger.Warn("Cannot delete default session")
-		return fmt.Errorf("cannot delete default session")
-	}
 
 	sessionPath := filepath.Join(fs.basePath, "sessions", fmt.Sprintf("%s.json", sessionID))
 	if err := os.Remove(sessionPath); err != nil {
@@ -343,119 +320,6 @@ func (fs *FileStorage) Ping(ctx context.Context) error {
 		return fmt.Errorf("storage ping failed: %w", err)
 	}
 	return nil
-}
-
-// Legacy support methods for backward compatibility with existing chat_history.json
-
-// saveLegacyChatHistory saves messages in the legacy format for backward compatibility
-func (fs *FileStorage) saveLegacyChatHistory(messages []models.ChatMessage) error {
-	if fs.app == nil {
-		fs.logger.Warn("No app instance available for legacy storage")
-		return fmt.Errorf("no app instance available for legacy storage")
-	}
-
-	root := fs.app.Storage().RootURI()
-	uri, err := storage.Child(root, "chat_history.json")
-	if err != nil {
-		fs.logger.Error("Failed to get legacy chat history URI", "error", err)
-		return fmt.Errorf("failed to get legacy chat history URI: %w", err)
-	}
-
-	file, err := storage.Writer(uri)
-	if err != nil {
-		fs.logger.Error("Failed to create legacy chat history writer", "error", err)
-		return fmt.Errorf("failed to create legacy chat history writer: %w", err)
-	}
-	defer file.Close()
-
-	// Convert new format messages to legacy format
-	legacyMessages := make([]map[string]interface{}, len(messages))
-	for i, msg := range messages {
-		legacyMessages[i] = map[string]interface{}{
-			"sender":    msg.Sender,
-			"content":   msg.Content,
-			"timestamp": msg.Timestamp.Format(time.RFC3339),
-		}
-	}
-
-	data, err := json.Marshal(legacyMessages)
-	if err != nil {
-		fs.logger.Error("Failed to marshal legacy messages", "error", err)
-		return fmt.Errorf("failed to marshal legacy messages: %w", err)
-	}
-
-	if _, err := file.Write(data); err != nil {
-		fs.logger.Error("Failed to write legacy chat history", "error", err)
-		return fmt.Errorf("failed to write legacy chat history: %w", err)
-	}
-
-	fs.logger.Info("Successfully saved legacy chat history", "message_count", len(messages))
-	return nil
-}
-
-// loadLegacyChatHistory loads messages from the legacy chat_history.json format
-func (fs *FileStorage) loadLegacyChatHistory() ([]models.ChatMessage, error) {
-	if fs.app == nil {
-		fs.logger.Warn("No app instance available for legacy storage")
-		return []models.ChatMessage{}, nil
-	}
-
-	root := fs.app.Storage().RootURI()
-	uri, err := storage.Child(root, "chat_history.json")
-	if err != nil {
-		fs.logger.Error("Failed to get legacy chat history URI", "error", err)
-		return nil, fmt.Errorf("failed to get legacy chat history URI: %w", err)
-	}
-
-	file, err := storage.Reader(uri)
-	if err != nil {
-		if os.IsNotExist(err) || strings.Contains(err.Error(), "no such file") {
-			fs.logger.Info("Legacy chat history file not found")
-			return []models.ChatMessage{}, nil
-		}
-		fs.logger.Error("Failed to open legacy chat history reader", "error", err)
-		return nil, fmt.Errorf("failed to open legacy chat history reader: %w", err)
-	}
-	defer file.Close()
-
-	var legacyMessages []map[string]interface{}
-	if err := json.NewDecoder(file).Decode(&legacyMessages); err != nil {
-		fs.logger.Error("Failed to decode legacy chat history", "error", err)
-		return nil, fmt.Errorf("failed to decode legacy chat history: %w", err)
-	}
-
-	// Convert legacy format to new format
-	messages := make([]models.ChatMessage, len(legacyMessages))
-	for i, legacyMsg := range legacyMessages {
-		// Handle timestamp conversion
-		var timestamp time.Time
-		if tsStr, ok := legacyMsg["timestamp"].(string); ok && tsStr != "" {
-			if parsed, err := time.Parse(time.RFC3339, tsStr); err == nil {
-				timestamp = parsed
-			} else {
-				timestamp = time.Now()
-			}
-		} else {
-			timestamp = time.Now()
-		}
-
-		messages[i] = models.ChatMessage{
-			Sender:    getString(legacyMsg, "sender"),
-			Content:   getString(legacyMsg, "content"),
-			Timestamp: timestamp,
-		}
-	}
-
-	fs.logger.Info("Successfully loaded legacy chat history", "message_count", len(messages))
-	return messages, nil
-}
-
-// getString safely extracts a string value from a map
-func getString(m map[string]interface{}, key string) string {
-	if val, ok := m[key].(string); ok {
-		return val
-	}
-	return ""
 }
 
 // DefaultFileStorageFactory creates file storage instances

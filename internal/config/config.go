@@ -24,11 +24,12 @@ type AppConfig struct {
 }
 
 type LLMConfig struct {
-	Provider string                 `yaml:"provider"` // "ollama", "openai", "eino"
-	Ollama   OllamaConfig           `yaml:"ollama"`
-	OpenAI   OpenAIConfig           `yaml:"openai"`
-	Eino     EinoConfig             `yaml:"eino"`
-	Settings map[string]interface{} `yaml:"settings"`
+	Provider           string                 `yaml:"provider"`            // "ollama", "openai", "eino"
+	AvailableProviders []string               `yaml:"available_providers"` // List of configured providers
+	Ollama             OllamaConfig           `yaml:"ollama"`
+	OpenAI             OpenAIConfig           `yaml:"openai"`
+	Eino               EinoConfig             `yaml:"eino"`
+	Settings           map[string]interface{} `yaml:"settings"`
 }
 
 type OllamaConfig struct {

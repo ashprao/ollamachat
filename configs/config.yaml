@@ -4,7 +4,8 @@ app:
   log_level: "info"
 
 llm:
-  provider: "ollama"  # "ollama", "openai", "eino"
+  provider: "ollama"  # Current active provider
+  available_providers: ["ollama"]  # List of configured providers
   ollama:
     base_url: "http://localhost:11434"
     default_model: "llama3.2:latest"
@@ -16,11 +17,11 @@ llm:
     default_model: "llama3.2:latest"
     settings: {}
   settings:
-    timeout_seconds: 30
+    timeout_seconds: 60
     max_tokens: 2048
 
 ui:
-  window_width: 600
+  window_width: 800  # Increased to accommodate session sidebar
   window_height: 700
   max_messages: 10
 
