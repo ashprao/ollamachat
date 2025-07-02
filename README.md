@@ -6,6 +6,12 @@ OllamaChat is a modular Go application built with industry-standard architecture
 
 The application is designed with future extensibility in mind, providing a foundation for advanced features like Model Context Protocol (MCP) client/server support, agentic frameworks, and multi-provider LLM integration.
 
+## Screenshot
+
+![OllamaChat Interface](screenshot.png)
+
+*OllamaChat running on macOS showing the clean, intuitive interface with model selection, streaming responses, and persistent chat history.*
+
 ## Acknowledgments
 
 Shout out to [Fyne](https://fyne.io/) for providing a powerful and intuitive GUI library that simplifies our development process. This project is made possible by the contributions of the Fyne community, and their efforts in creating an excellent and promising framework is appreciated.
@@ -120,8 +126,8 @@ ollamachat/
 The `data/` directory contains all persistent application data:
 
 - **`preferences.json`**: Stores user preferences including window size, theme, font settings, and feature flags
-- **`sessions/`**: Future directory for individual chat session files (*.json)
-- **Legacy compatibility**: The application maintains backward compatibility with existing `chat_history.json` files stored in Fyne's app storage
+- **`sessions/`**: Individual chat session files (*.json) with automatic timestamping and sorting
+- **Legacy compatibility**: The application maintains backward compatibility with existing `chat_history.json` files, automatically migrating them to the new session format
 
 The application automatically creates the data directory and required files on first run.
 
@@ -136,24 +142,19 @@ app:
   log_level: "info"
 
 llm:
-  providers:
-    - name: "ollama"
-      type: "ollama"
-      base_url: "http://localhost:11434"
-      timeout: 30
-      enabled: true
-  default_provider: "ollama"
-
-storage:
-  type: "file"
-  base_path: "data"
+  provider: "ollama"  # Current active provider
+  available_providers: ["ollama"]  # List of configured providers
+  ollama:
+    base_url: "http://localhost:11434"
+    default_model: "llama3.2:latest"
+  openai:
+    base_url: "https://api.openai.com/v1"
+    default_model: "gpt-3.5-turbo"
+    # api_key: ""  # Set via OPENAI_API_KEY environment variable
 
 ui:
-  theme: "auto"
-  window:
-    width: 600
-    height: 700
-  font_size: 12
+  window_width: 800  # Accommodates session sidebar
+  window_height: 700
 ```
 
 Configuration can be modified by editing the YAML file or through the application preferences (stored in `data/preferences.json`).
@@ -174,13 +175,15 @@ The application architecture is designed to support advanced features planned fo
 
 ### Multi-Provider LLM Support
 - **Provider Abstraction**: `internal/llm/provider.go` defines interfaces for multiple LLM providers
+- **Provider Factory**: `internal/llm/factory.go` implements provider creation and validation
 - **Extensible Design**: Easy addition of new providers (OpenAI, Anthropic, Cohere, etc.)
-- **Provider Switching**: Runtime provider selection capability
+- **Provider Display**: Current provider shown in UI with switching infrastructure ready
 
 ### Session Management
-- **Multi-Session Support**: Framework for managing multiple chat sessions
-- **Session Persistence**: Individual session storage in `data/sessions/`
-- **Session Import/Export**: Planned support for session sharing
+- **Multi-Session Support**: Create, switch between, and delete multiple chat sessions with individual persistence
+- **Session Sidebar**: Resizable sidebar with session list sorted by most recent activity
+- **Auto-save**: Automatic session saving on message updates with proper timestamping
+- **Legacy Migration**: Automatic migration from single chat history to multi-session format
 
 ### Advanced Features
 - **Structured Logging**: Comprehensive logging with configurable levels
@@ -193,11 +196,13 @@ The application architecture is designed to support advanced features planned fo
 1. **Launch the Program**: Execute the binary without additional arguments.
 2. **Fetch Available Models**: Upon startup, the program retrieves a list of models from the LLM server.
 3. **Select a Model**: Users can select a model from a dropdown to determine which model the LLM server will use for query processing.
-4. **Submit a Query**: Type a query into the text field and send it to the LLM.
-5. **Receive Streaming Response**: The application processes the LLM's streaming responses and updates the UI in real-time.
-6. **Persistent Chat History**: Chat history is automatically saved and restored between sessions. Clearing the chat will also clear the saved history.
-7. **Context Window for LLM**: The LLM receives previous messages as context (not just the latest message). By default, only the last 10 messages are sent for context.
-8. **Export Chat**: Use the "Save" button to export the conversation as plain text, using the original message content.
+4. **Session Management**: Create, switch between, and delete multiple chat sessions using the resizable sidebar. Sessions are automatically sorted by most recent activity.
+5. **Submit a Query**: Type a query into the text field and send it to the LLM.
+6. **Receive Streaming Response**: The application processes the LLM's streaming responses and updates the UI in real-time.
+7. **Persistent Chat History**: Each session's chat history is automatically saved and restored. Sessions are stored individually for better organization.
+8. **Context Window for LLM**: The LLM receives previous messages as context (not just the latest message). By default, only the last 10 messages are sent for context.
+9. **Export Chat**: Use the "Save" button to export the current session's conversation as plain text.
+10. **Provider Information**: The current LLM provider is displayed in the interface, with infrastructure ready for provider switching.
 
 ## Architecture & Implementation
 
@@ -274,9 +279,11 @@ The UI is implemented in the `internal/ui` package with modular, reusable compon
 
 ### Component Architecture
 
-- **ChatUI**: Main chat interface with dependency injection
+- **ChatUI**: Main chat interface with dependency injection and session management
+- **Session Sidebar**: Resizable sidebar with session list, creation, and selection
 - **Reusable Components**: Shared UI components in `internal/ui/components.go`
 - **Responsive Design**: Dynamic sizing and adaptive layouts
+- **Provider Display**: Current LLM provider information integrated into the interface
 
 ### Model Selection
 

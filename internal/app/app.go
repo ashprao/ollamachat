@@ -18,10 +18,11 @@ import (
 // App represents the main application container with all dependencies
 type App struct {
 	// Core dependencies
-	config   *config.Config
-	logger   *logger.Logger
-	provider llm.Provider
-	storage  storage.Storage
+	config          *config.Config
+	logger          *logger.Logger
+	provider        llm.Provider
+	providerFactory *llm.DefaultProviderFactory
+	storage         storage.Storage
 
 	// UI components
 	fyneApp fyne.App
@@ -95,7 +96,7 @@ func New(appConfig AppConfig) (*App, error) {
 				},
 			},
 			UI: config.UIConfig{
-				WindowWidth:  600,
+				WindowWidth:  800, // Increased from 600 to accommodate session sidebar
 				WindowHeight: 700,
 			},
 		}
@@ -131,36 +132,29 @@ func New(appConfig AppConfig) (*App, error) {
 
 	logger.Info("Storage initialized", "type", "file", "path", storagePath)
 
-	// Initialize LLM provider
+	// Initialize LLM provider factory
+	providerFactory := llm.NewDefaultProviderFactory(cfg, logger)
+
+	// Get provider type from config or command line
 	providerType := appConfig.ProviderType
 	if providerType == "" {
 		providerType = cfg.LLM.Provider
 	}
 
-	baseURL := appConfig.BaseURL
-	if baseURL == "" {
-		baseURL = cfg.LLM.Ollama.BaseURL
+	// Validate provider configuration
+	if err := providerFactory.ValidateProviderConfig(providerType); err != nil {
+		logger.Error("Provider configuration validation failed", "provider", providerType, "error", err)
+		return nil, fmt.Errorf("provider configuration validation failed: %w", err)
 	}
 
-	var provider llm.Provider
-	switch providerType {
-	case "ollama", "":
-		ollamaFactory := llm.NewDefaultOllamaProviderFactory(logger)
-		providerConfig := llm.ProviderConfig{
-			Type:    "ollama",
-			BaseURL: baseURL,
-		}
-		provider, err = ollamaFactory.CreateProvider(providerConfig)
-		if err != nil {
-			logger.Error("Failed to create Ollama provider", "error", err)
-			return nil, fmt.Errorf("failed to create Ollama provider: %w", err)
-		}
-	default:
-		logger.Error("Unsupported provider type", "provider", providerType)
-		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
+	// Create provider instance
+	provider, err := providerFactory.CreateProviderFromConfig(providerType)
+	if err != nil {
+		logger.Error("Failed to create LLM provider", "provider", providerType, "error", err)
+		return nil, fmt.Errorf("failed to create LLM provider: %w", err)
 	}
 
-	logger.Info("LLM provider initialized", "provider", provider.GetName(), "base_url", baseURL)
+	logger.Info("LLM provider initialized", "provider", provider.GetName(), "provider_type", providerType)
 
 	// Ping storage to ensure it's working
 	ctx := context.Background()
@@ -168,17 +162,18 @@ func New(appConfig AppConfig) (*App, error) {
 		logger.Warn("Storage ping failed", "error", err)
 	}
 
-	// Create ChatUI
-	chatUI := ui.NewChatUI(window, provider, stor, logger)
+	// Create ChatUI with provider information
+	chatUI := ui.NewChatUI(window, provider, stor, logger, providerFactory.GetAvailableProviders(), providerType)
 
 	app := &App{
-		config:   cfg,
-		logger:   logger,
-		provider: provider,
-		storage:  stor,
-		fyneApp:  fyneApp,
-		window:   window,
-		chatUI:   chatUI,
+		config:          cfg,
+		logger:          logger,
+		provider:        provider,
+		providerFactory: providerFactory,
+		storage:         stor,
+		fyneApp:         fyneApp,
+		window:          window,
+		chatUI:          chatUI,
 	}
 
 	logger.Info("Application initialization completed successfully")
@@ -263,4 +258,46 @@ func (a *App) GetChatUI() *ui.ChatUI {
 // IsRunning returns whether the application is currently running
 func (a *App) IsRunning() bool {
 	return a.isRunning
+}
+
+// SwitchProvider switches to a different LLM provider
+func (a *App) SwitchProvider(providerType string) error {
+	a.logger.Info("Switching LLM provider", "from", a.provider.GetName(), "to", providerType)
+
+	// Validate the new provider configuration
+	if err := a.providerFactory.ValidateProviderConfig(providerType); err != nil {
+		a.logger.Error("Provider configuration validation failed", "provider", providerType, "error", err)
+		return fmt.Errorf("provider configuration validation failed: %w", err)
+	}
+
+	// Create new provider instance
+	newProvider, err := a.providerFactory.CreateProviderFromConfig(providerType)
+	if err != nil {
+		a.logger.Error("Failed to create new provider", "provider", providerType, "error", err)
+		return fmt.Errorf("failed to create provider: %w", err)
+	}
+
+	// Update the provider
+	a.provider = newProvider
+
+	// Update the config to reflect the new provider
+	a.config.LLM.Provider = providerType
+
+	// Update the UI with the new provider
+	if a.chatUI != nil {
+		a.chatUI.UpdateProvider(newProvider)
+	}
+
+	a.logger.Info("Successfully switched LLM provider", "provider", newProvider.GetName())
+	return nil
+}
+
+// GetAvailableProviders returns the list of available providers
+func (a *App) GetAvailableProviders() []string {
+	return a.providerFactory.GetAvailableProviders()
+}
+
+// GetCurrentProviderType returns the current provider type
+func (a *App) GetCurrentProviderType() string {
+	return a.providerFactory.GetCurrentProvider()
 }

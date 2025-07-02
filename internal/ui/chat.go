@@ -19,12 +19,42 @@ import (
 	"github.com/ashprao/ollamachat/pkg/logger"
 )
 
+// AppInterface defines the interface for app functions that the UI needs
+type AppInterface interface {
+	SwitchProvider(providerType string) error
+	GetAvailableProviders() []string
+	GetCurrentProviderType() string
+}
+
+// NewChatUI creates a new chat UI instance
+func NewChatUI(window fyne.Window, provider llm.Provider, storage storage.Storage, logger *logger.Logger, availableProviders []string, currentProviderType string) *ChatUI {
+	ui := &ChatUI{
+		provider:            provider,
+		storage:             storage,
+		logger:              logger.WithComponent("chat-ui"),
+		window:              window,
+		chatContainer:       container.NewVBox(),
+		inputField:          widget.NewMultiLineEntry(),
+		statusLabel:         widget.NewLabel(""),
+		modelSelect:         widget.NewSelect([]string{}, nil),
+		availableProviders:  availableProviders,
+		currentProviderType: currentProviderType,
+		currentSession:      models.NewChatSession("Default Session", ""),
+	}
+
+	ui.currentSession.ID = "default" // For backward compatibility
+	ui.logger.Info("Chat UI created")
+	return ui
+}
+
 // ChatUI handles the main chat interface
 type ChatUI struct {
 	// Dependencies
-	provider llm.Provider
-	storage  storage.Storage
-	logger   *logger.Logger
+	provider            llm.Provider
+	storage             storage.Storage
+	logger              *logger.Logger
+	availableProviders  []string
+	currentProviderType string
 
 	// UI components
 	window          fyne.Window
@@ -33,10 +63,18 @@ type ChatUI struct {
 	inputField      *widget.Entry
 	statusLabel     *widget.Label
 	modelSelect     *widget.Select
+	providerSelect  *widget.Select
+	providerLabel   *widget.Label
 	sendButton      *widget.Button
 	clearButton     *widget.Button
 	saveButton      *widget.Button
 	cancelButton    *widget.Button
+
+	// Session management UI
+	sessionList      *widget.List
+	newSessionButton *widget.Button
+	sessionSidebar   *fyne.Container
+	sessions         []models.ChatSession
 
 	// State
 	cancelFunc      context.CancelFunc
@@ -44,43 +82,36 @@ type ChatUI struct {
 	currentSession  models.ChatSession
 }
 
-// NewChatUI creates a new chat UI instance
-func NewChatUI(window fyne.Window, provider llm.Provider, storage storage.Storage, logger *logger.Logger) *ChatUI {
-	ui := &ChatUI{
-		provider:       provider,
-		storage:        storage,
-		logger:         logger.WithComponent("chat-ui"),
-		window:         window,
-		chatContainer:  container.NewVBox(),
-		inputField:     widget.NewMultiLineEntry(),
-		statusLabel:    widget.NewLabel(""),
-		modelSelect:    widget.NewSelect([]string{}, nil),
-		currentSession: models.NewChatSession("Default Session", ""),
-	}
-
-	ui.currentSession.ID = "default" // For backward compatibility
-	ui.logger.Info("Chat UI created")
-	return ui
-}
-
 // Initialize sets up the UI components and loads initial data
 func (ui *ChatUI) Initialize() error {
 	ui.logger.Info("Initializing chat UI")
 
-	// Load existing session or create new one
+	// Load all sessions
+	if err := ui.loadAllSessions(); err != nil {
+		ui.logger.Error("Failed to load sessions", "error", err)
+		// Continue with empty session rather than failing
+	}
+
+	// Load or create current session
 	if err := ui.loadCurrentSession(); err != nil {
-		ui.logger.Error("Failed to load session", "error", err)
+		ui.logger.Error("Failed to load current session", "error", err)
 		// Continue with empty session rather than failing
 	}
 
 	// Setup UI components
 	ui.setupUI()
 
+	// Load messages from current session into UI
+	ui.loadCurrentSessionMessages()
+
 	// Load available models
 	if err := ui.setupModelSelection(); err != nil {
 		ui.logger.Error("Failed to setup model selection", "error", err)
 		return fmt.Errorf("failed to setup model selection: %w", err)
 	}
+
+	// Select current session in the sidebar
+	ui.selectCurrentSessionInList()
 
 	ui.logger.Info("Chat UI initialized successfully")
 	return nil
@@ -93,6 +124,9 @@ func (ui *ChatUI) setupUI() {
 	ui.inputField.OnChanged = ui.onInputFieldChanged
 
 	ui.initButtons()
+	ui.initProviderUI()
+	ui.setupSessionSidebar()
+	ui.initProviderUI()
 
 	// Create model selection container
 	modelSelectContainer := container.NewGridWrap(
@@ -113,17 +147,13 @@ func (ui *ChatUI) setupUI() {
 	ui.scrollContainer = container.NewScroll(ui.chatContainer)
 	ui.scrollContainer.SetMinSize(fyne.NewSize(400, 300))
 
-	// Load existing messages into UI
-	for _, msg := range ui.currentSession.Messages {
-		isUserMessage := msg.Sender == "user"
-		ui.addMessageCard(msg.Content, isUserMessage, false)
-	}
+	// Note: Messages will be loaded after currentSession is set
 
-	// Main content layout
-	content := container.NewBorder(
+	// Main content layout with session sidebar
+	chatContent := container.NewBorder(
 		statusArea,
 		container.NewVBox(
-			container.NewHBox(modelSelectContainer, widget.NewLabel("Model to be used.")),
+			container.NewHBox(ui.providerLabel, modelSelectContainer, widget.NewLabel("Model to be used.")),
 			inputArea,
 		),
 		nil,
@@ -131,7 +161,11 @@ func (ui *ChatUI) setupUI() {
 		ui.scrollContainer,
 	)
 
-	ui.window.SetContent(content)
+	// Main layout with resizable session sidebar
+	mainContent := container.NewHSplit(ui.sessionSidebar, chatContent)
+	mainContent.SetOffset(0.25) // Sidebar takes 25% of width initially
+
+	ui.window.SetContent(mainContent)
 }
 
 // setupModelSelection loads available models and sets up the model selector
@@ -170,24 +204,42 @@ func (ui *ChatUI) setupModelSelection() error {
 // initButtons creates and configures all buttons
 func (ui *ChatUI) initButtons() {
 	ui.sendButton = widget.NewButtonWithIcon("Send", theme.ConfirmIcon(), ui.onSendButtonTapped)
-	ui.clearButton = widget.NewButtonWithIcon("Clear", theme.DeleteIcon(), ui.onClearButtonTapped)
+	ui.clearButton = widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), ui.onClearButtonTapped)
 	ui.saveButton = widget.NewButtonWithIcon("Save", theme.DocumentSaveIcon(), ui.onSaveButtonTapped)
 	ui.cancelButton = widget.NewButtonWithIcon("Cancel", theme.CancelIcon(), ui.onCancelButtonTapped)
 	ui.cancelButton.Hide()
 	ui.disableUtilityButtons()
 }
 
-// loadCurrentSession loads the current chat session from storage
+// initProviderUI initializes provider-related UI components
+func (ui *ChatUI) initProviderUI() {
+	// Provider label to show current provider
+	ui.providerLabel = widget.NewLabel(fmt.Sprintf("Provider: %s", ui.currentProviderType))
+	ui.providerLabel.TextStyle = fyne.TextStyle{Italic: true}
+
+	// Provider selector (for future use when multiple providers are available)
+	ui.providerSelect = widget.NewSelect(ui.availableProviders, ui.onProviderSelected)
+	ui.providerSelect.SetSelected(ui.currentProviderType)
+
+	// For now, hide the selector since we only have Ollama
+	if len(ui.availableProviders) <= 1 {
+		ui.providerSelect.Hide()
+	}
+}
+
+// loadCurrentSession loads the most recent chat session from storage
 func (ui *ChatUI) loadCurrentSession() error {
-	ctx := context.Background()
-	session, err := ui.storage.LoadChatSession(ctx, "default")
-	if err != nil {
-		ui.logger.Info("No existing session found, starting with empty session")
+	// If we have sessions loaded, use the most recent one (first in sorted list)
+	if len(ui.sessions) > 0 {
+		ui.currentSession = ui.sessions[0]
+		ui.logger.Info("Loaded most recent session", "session_id", ui.currentSession.ID, "message_count", len(ui.currentSession.Messages))
 		return nil
 	}
 
-	ui.currentSession = session
-	ui.logger.Info("Loaded existing session", "message_count", len(session.Messages))
+	// No existing sessions, create a new one
+	ui.currentSession = models.NewChatSession(fmt.Sprintf("Session %s", time.Now().Format("15:04")), "")
+	ui.autoSaveCurrentSession()
+	ui.logger.Info("Created new session", "session_id", ui.currentSession.ID)
 	return nil
 }
 
@@ -238,17 +290,16 @@ func (ui *ChatUI) onSendButtonTapped() {
 }
 
 func (ui *ChatUI) onClearButtonTapped() {
-	ui.chatContainer.Objects = nil
-	ui.chatContainer.Refresh()
+	// Show confirmation dialog for session deletion
+	dialog.ShowConfirm("Delete Session",
+		fmt.Sprintf("Are you sure you want to delete the session '%s'? This action cannot be undone.", ui.currentSession.Name),
+		func(confirmed bool) {
+			if !confirmed {
+				return
+			}
 
-	ui.currentSession.Messages = []models.ChatMessage{}
-	if err := ui.saveCurrentSession(); err != nil {
-		dialog.ShowError(err, ui.window)
-	}
-
-	ui.disableUtilityButtons()
-	ui.window.Content().Refresh()
-	ui.logger.Info("Chat cleared")
+			ui.deleteCurrentSession()
+		}, ui.window)
 }
 
 func (ui *ChatUI) onSaveButtonTapped() {
@@ -307,6 +358,56 @@ func (ui *ChatUI) onModelSelect(selected string) {
 	ui.logger.Info("Model selected", "model", selected)
 }
 
+// onProviderSelected handles provider selection changes
+func (ui *ChatUI) onProviderSelected(selected string) {
+	if selected == ui.currentProviderType {
+		return // No change
+	}
+
+	ui.logger.Info("Provider selection changed", "from", ui.currentProviderType, "to", selected)
+
+	// For now, just show a message that this feature will be available later
+	dialog.ShowInformation("Provider Switching",
+		fmt.Sprintf("Switching to %s provider will be available in a future version.", selected),
+		ui.window)
+}
+
+// UpdateProvider updates the UI to use a new provider
+func (ui *ChatUI) UpdateProvider(newProvider llm.Provider) {
+	ui.provider = newProvider
+
+	// Update current provider type based on provider name
+	providerName := newProvider.GetName()
+	if strings.Contains(strings.ToLower(providerName), "ollama") {
+		ui.currentProviderType = "ollama"
+	} else if strings.Contains(strings.ToLower(providerName), "openai") {
+		ui.currentProviderType = "openai"
+	} else if strings.Contains(strings.ToLower(providerName), "eino") {
+		ui.currentProviderType = "eino"
+	}
+
+	ui.logger.Info("UI updated with new provider", "provider", newProvider.GetName(), "type", ui.currentProviderType)
+
+	// Reload models for the new provider
+	if err := ui.setupModelSelection(); err != nil {
+		ui.logger.Error("Failed to reload models for new provider", "error", err)
+	}
+
+	// Update any provider-specific UI elements
+	ui.refreshProviderInfo()
+}
+
+// refreshProviderInfo updates UI elements that display provider information
+func (ui *ChatUI) refreshProviderInfo() {
+	if ui.providerLabel != nil {
+		ui.providerLabel.SetText(fmt.Sprintf("Provider: %s", ui.currentProviderType))
+	}
+	if ui.providerSelect != nil {
+		ui.providerSelect.SetSelected(ui.currentProviderType)
+	}
+	ui.logger.Info("Provider info refreshed", "provider", ui.provider.GetName())
+}
+
 // Helper methods
 
 func (ui *ChatUI) extractModelNames(models []models.Model) []string {
@@ -350,9 +451,17 @@ func (ui *ChatUI) addMessageCard(content string, isUserMessage, saveToHistory bo
 	if saveToHistory {
 		message := models.NewChatMessage(sender, content)
 		ui.currentSession.AddMessage(message)
-		if err := ui.saveCurrentSession(); err != nil {
-			dialog.ShowError(err, ui.window)
+
+		// Update session model if user message and model is selected
+		if isUserMessage && ui.modelSelect.Selected != "" {
+			ui.currentSession.Model = ui.modelSelect.Selected
 		}
+
+		// Auto-save session
+		ui.autoSaveCurrentSession()
+
+		// Refresh sessions list to show updated timestamp
+		go ui.refreshSessionsList()
 	}
 
 	return messageCard
@@ -385,11 +494,6 @@ func (ui *ChatUI) showProcessingStatus() {
 func (ui *ChatUI) clearProcessingStatus() {
 	ui.statusLabel.SetText("")
 	ui.cancelButton.Hide()
-	ui.window.Content().Refresh()
-}
-
-func (ui *ChatUI) updateStatus(status string) {
-	ui.statusLabel.SetText(status)
 	ui.window.Content().Refresh()
 }
 
@@ -488,4 +592,307 @@ func (ui *ChatUI) sendMessageToLLM(ctx context.Context, selectedModel, query str
 	ui.queryInProgress = false
 	ui.updateSendButtonState()
 	ui.handleLLMResponseError(err)
+}
+
+// Session Management Methods
+
+// loadAllSessions loads all available chat sessions from storage
+func (ui *ChatUI) loadAllSessions() error {
+	ctx := context.Background()
+	sessions, err := ui.storage.ListChatSessions(ctx)
+	if err != nil {
+		ui.logger.Error("Failed to list sessions", "error", err)
+		// Initialize with empty sessions list
+		ui.sessions = []models.ChatSession{}
+		return nil
+	}
+
+	ui.sessions = sessions
+	ui.logger.Info("Loaded sessions", "count", len(sessions))
+
+	// Debug logging for UI session order
+	ui.logger.Info("UI Session order:")
+	for i, session := range ui.sessions {
+		ui.logger.Info("UI Session", "index", i, "id", session.ID, "name", session.Name, "updated_at", session.UpdatedAt.Format("2006-01-02 15:04:05"))
+	}
+
+	return nil
+}
+
+// setupSessionSidebar creates and configures the session management sidebar
+func (ui *ChatUI) setupSessionSidebar() {
+	// New Session button
+	ui.newSessionButton = widget.NewButton("+ New Session", ui.onNewSessionTapped)
+	ui.newSessionButton.Importance = widget.HighImportance
+
+	// Session list
+	ui.sessionList = widget.NewList(
+		func() int {
+			return len(ui.sessions)
+		},
+		func() fyne.CanvasObject {
+			return container.NewVBox(
+				widget.NewLabel("Session Name"),
+				widget.NewLabel("Last Updated"),
+			)
+		},
+		func(id widget.ListItemID, obj fyne.CanvasObject) {
+			if id >= len(ui.sessions) {
+				return
+			}
+
+			session := ui.sessions[id]
+			container := obj.(*fyne.Container)
+			nameLabel := container.Objects[0].(*widget.Label)
+			timeLabel := container.Objects[1].(*widget.Label)
+
+			nameLabel.SetText(session.Name)
+			timeLabel.SetText(session.UpdatedAt.Format("Jan 2, 15:04"))
+
+			// Highlight current session
+			if session.ID == ui.currentSession.ID {
+				nameLabel.TextStyle = fyne.TextStyle{Bold: true}
+			} else {
+				nameLabel.TextStyle = fyne.TextStyle{}
+			}
+
+			nameLabel.Refresh()
+		},
+	)
+
+	ui.sessionList.OnSelected = ui.onSessionSelected
+
+	// Session sidebar container with elegant border
+	sidebarTitle := widget.NewLabel("Chat Sessions")
+	sidebarTitle.TextStyle = fyne.TextStyle{Bold: true}
+
+	// Create sidebar content
+	sidebarContent := container.NewBorder(
+		container.NewVBox(sidebarTitle, ui.newSessionButton),
+		nil,
+		nil,
+		nil,
+		ui.sessionList,
+	)
+
+	// Add padding and create a container with visual separation
+	sidebarWithPadding := container.NewPadded(sidebarContent)
+
+	// Create a vertical separator line for elegant border
+	separator := canvas.NewLine(theme.SeparatorColor())
+	separator.StrokeWidth = 1
+
+	ui.sessionSidebar = container.NewBorder(
+		nil, nil, nil, separator, sidebarWithPadding,
+	)
+}
+
+// onNewSessionTapped handles creating a new chat session
+func (ui *ChatUI) onNewSessionTapped() {
+	// Save current session before switching
+	if err := ui.saveCurrentSession(); err != nil {
+		ui.logger.Error("Failed to save current session", "error", err)
+		dialog.ShowError(err, ui.window)
+		return
+	}
+
+	// Create new session
+	newSession := models.NewChatSession(fmt.Sprintf("Session %s", time.Now().Format("15:04")), ui.modelSelect.Selected)
+
+	// Save the new session immediately
+	ui.currentSession = newSession
+	ui.autoSaveCurrentSession()
+
+	// Add to beginning of sessions list (most recent first)
+	ui.sessions = append([]models.ChatSession{newSession}, ui.sessions...)
+
+	// Clear UI and update session selection
+	ui.chatContainer.Objects = nil
+	ui.chatContainer.Refresh()
+
+	// Update session selection using helper method
+	ui.updateSessionSelection(newSession)
+
+	ui.logger.Info("Created new session", "session_id", newSession.ID, "session_name", newSession.Name)
+}
+
+// onSessionSelected handles switching to a selected session
+func (ui *ChatUI) onSessionSelected(id widget.ListItemID) {
+	if id >= len(ui.sessions) {
+		return
+	}
+
+	selectedSession := ui.sessions[id]
+
+	// Don't switch if it's the same session
+	if selectedSession.ID == ui.currentSession.ID {
+		return
+	}
+
+	// Save current session before switching
+	if err := ui.saveCurrentSession(); err != nil {
+		ui.logger.Error("Failed to save current session", "error", err)
+		dialog.ShowError(err, ui.window)
+		return
+	}
+
+	// Switch to selected session using the helper method
+	ui.updateSessionSelection(selectedSession)
+
+	// Clear and reload UI
+	ui.chatContainer.Objects = nil
+	ui.chatContainer.Refresh()
+
+	// Load session messages into UI
+	for _, msg := range ui.currentSession.Messages {
+		isUserMessage := msg.Sender == "user"
+		ui.addMessageCard(msg.Content, isUserMessage, false)
+	}
+
+	// Update model selection if session has a saved model
+	if ui.currentSession.Model != "" {
+		ui.modelSelect.SetSelected(ui.currentSession.Model)
+	}
+
+	ui.scrollContainer.ScrollToBottom()
+
+	ui.logger.Info("Switched to session", "session_id", selectedSession.ID, "session_name", selectedSession.Name)
+}
+
+// refreshSessionsList updates the sessions list and refreshes the UI
+func (ui *ChatUI) refreshSessionsList() {
+	if err := ui.loadAllSessions(); err != nil {
+		ui.logger.Error("Failed to refresh sessions list", "error", err)
+		return
+	}
+	ui.sessionList.Refresh()
+
+	// Select current session in the list if it exists
+	ui.selectCurrentSessionInList()
+}
+
+// selectCurrentSessionInList finds and selects the current session in the session list
+func (ui *ChatUI) selectCurrentSessionInList() {
+	for i, session := range ui.sessions {
+		if session.ID == ui.currentSession.ID {
+			ui.sessionList.Select(i)
+			break
+		}
+	}
+}
+
+// autoSaveCurrentSession saves the current session automatically
+func (ui *ChatUI) autoSaveCurrentSession() {
+	if err := ui.saveCurrentSession(); err != nil {
+		ui.logger.Error("Auto-save failed", "error", err)
+		// Don't show dialog for auto-save failures to avoid interrupting user
+	}
+}
+
+// deleteCurrentSession deletes the current chat session and updates the UI
+func (ui *ChatUI) deleteCurrentSession() {
+	sessionID := ui.currentSession.ID
+	ui.logger.Info("Deleting current session", "session_id", sessionID)
+
+	// Delete the session from storage
+	if err := ui.storage.DeleteChatSession(context.Background(), sessionID); err != nil {
+		ui.logger.Error("Failed to delete session", "session_id", sessionID, "error", err)
+		dialog.ShowError(fmt.Errorf("failed to delete session: %v", err), ui.window)
+		return
+	}
+
+	// Get updated sessions list
+	sessions, err := ui.storage.ListChatSessions(context.Background())
+	if err != nil {
+		ui.logger.Error("Failed to list sessions after deletion", "error", err)
+		dialog.ShowError(fmt.Errorf("failed to refresh sessions: %v", err), ui.window)
+		return
+	}
+
+	// If no sessions remain, create a new session
+	if len(sessions) == 0 {
+		ui.logger.Info("No sessions remaining, creating new session")
+		newSession := models.NewChatSession(fmt.Sprintf("Session %s", time.Now().Format("15:04")), ui.currentSession.Model)
+		ui.currentSession = newSession
+		ui.autoSaveCurrentSession()
+	} else {
+		// Switch to the first available session (most recent due to sorting)
+		ui.currentSession = sessions[0]
+		ui.logger.Info("Switched to next available session", "session_id", ui.currentSession.ID)
+	}
+
+	// Clear and refresh UI
+	ui.chatContainer.Objects = nil
+	ui.chatContainer.Refresh()
+
+	// Load session messages into UI
+	for _, msg := range ui.currentSession.Messages {
+		isUserMessage := msg.Sender == "user"
+		ui.addMessageCard(msg.Content, isUserMessage, false)
+	}
+
+	// Update model selection if session has a saved model
+	if ui.currentSession.Model != "" {
+		ui.modelSelect.SetSelected(ui.currentSession.Model)
+	}
+
+	ui.scrollContainer.ScrollToBottom()
+
+	// Refresh sessions list and automatically select the current session
+	go func() {
+		ui.refreshSessionsList()
+		// Find and select the current session in the list
+		for i, session := range ui.sessions {
+			if session.ID == ui.currentSession.ID {
+				ui.sessionList.Select(i)
+				break
+			}
+		}
+	}()
+
+	ui.disableUtilityButtons()
+	ui.window.Content().Refresh()
+	ui.logger.Info("Session deleted successfully", "deleted_session_id", sessionID, "current_session_id", ui.currentSession.ID)
+}
+
+// loadCurrentSessionMessages loads messages from the current session into the UI
+func (ui *ChatUI) loadCurrentSessionMessages() {
+	// Clear existing messages
+	ui.chatContainer.Objects = nil
+
+	// Load messages from current session
+	for _, msg := range ui.currentSession.Messages {
+		isUserMessage := msg.Sender == "user"
+		ui.addMessageCard(msg.Content, isUserMessage, false)
+	}
+
+	// Update model selection if session has a saved model
+	if ui.currentSession.Model != "" && ui.modelSelect != nil {
+		ui.modelSelect.SetSelected(ui.currentSession.Model)
+	}
+
+	ui.chatContainer.Refresh()
+	if ui.scrollContainer != nil {
+		ui.scrollContainer.ScrollToBottom()
+	}
+
+	ui.logger.Info("Loaded session messages into UI", "session_id", ui.currentSession.ID, "message_count", len(ui.currentSession.Messages))
+}
+
+// updateSessionSelection updates the current session and refreshes the UI properly
+func (ui *ChatUI) updateSessionSelection(newSession models.ChatSession) {
+	ui.currentSession = newSession
+
+	// Refresh the session list to update bold styling
+	ui.sessionList.Refresh()
+
+	// Select the session in the list
+	for i, session := range ui.sessions {
+		if session.ID == newSession.ID {
+			ui.sessionList.Select(i)
+			break
+		}
+	}
+
+	ui.logger.Info("Updated session selection", "session_id", newSession.ID, "session_name", newSession.Name)
 }
