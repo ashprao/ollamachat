@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/ashprao/ollamachat/internal/config"
+	"github.com/ashprao/ollamachat/internal/constants"
 	"github.com/ashprao/ollamachat/pkg/logger"
 )
 
@@ -68,6 +69,17 @@ func (f *DefaultProviderFactory) GetCurrentProvider() string {
 	return f.config.LLM.Provider
 }
 
+// getTimeoutFromConfig extracts timeout_seconds from LLM config settings
+func (f *DefaultProviderFactory) getTimeoutFromConfig() int {
+	if timeoutValue, ok := f.config.LLM.Settings["timeout_seconds"]; ok {
+		if timeout, ok := timeoutValue.(int); ok {
+			return timeout
+		}
+	}
+	// Fallback to default
+	return constants.DefaultTimeoutSeconds
+}
+
 // ValidateProviderConfig validates if a provider can be created with current config
 func (f *DefaultProviderFactory) ValidateProviderConfig(providerType string) error {
 	switch providerType {
@@ -98,8 +110,18 @@ func (f *DefaultProviderFactory) createOllamaProvider(config ProviderConfig) (Pr
 		return nil, fmt.Errorf("ollama base_url is required")
 	}
 
-	f.logger.Info("Creating Ollama provider", "base_url", baseURL)
-	provider := NewOllamaProvider(baseURL, f.logger)
+	// Get timeout from provider config or use default
+	timeout := constants.DefaultTimeoutSeconds
+	if timeoutValue, ok := config.Settings["timeout_seconds"]; ok {
+		if timeoutInt, ok := timeoutValue.(int); ok {
+			timeout = timeoutInt
+		}
+	}
+
+	f.logger.Info("Creating Ollama provider",
+		"base_url", baseURL,
+		"timeout_seconds", timeout)
+	provider := NewOllamaProviderWithTimeout(baseURL, timeout, f.logger)
 	return provider, nil
 }
 
@@ -110,8 +132,13 @@ func (f *DefaultProviderFactory) createOllamaFromConfig() (Provider, error) {
 		return nil, fmt.Errorf("ollama base_url is required")
 	}
 
-	f.logger.Info("Creating Ollama provider from config", "base_url", config.BaseURL)
-	provider := NewOllamaProvider(config.BaseURL, f.logger)
+	// Get timeout from config
+	timeout := f.getTimeoutFromConfig()
+
+	f.logger.Info("Creating Ollama provider from config",
+		"base_url", config.BaseURL,
+		"timeout_seconds", timeout)
+	provider := NewOllamaProviderWithTimeout(config.BaseURL, timeout, f.logger)
 	return provider, nil
 }
 

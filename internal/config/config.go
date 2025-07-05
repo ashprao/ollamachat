@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ashprao/ollamachat/internal/constants"
+	"github.com/ashprao/ollamachat/internal/validation"
 	"gopkg.in/yaml.v3"
 )
 
@@ -49,9 +51,13 @@ type EinoConfig struct {
 }
 
 type UIConfig struct {
-	WindowWidth  int `yaml:"window_width"`
-	WindowHeight int `yaml:"window_height"`
-	MaxMessages  int `yaml:"max_messages"`
+	WindowWidth    int    `yaml:"window_width"`
+	WindowHeight   int    `yaml:"window_height"`
+	MaxMessages    int    `yaml:"max_messages"`
+	Theme          string `yaml:"theme"` // "light", "dark", "auto"
+	FontSize       int    `yaml:"font_size"`
+	ShowTimestamps bool   `yaml:"show_timestamps"`
+	SidebarWidth   int    `yaml:"sidebar_width"` // Session sidebar width
 }
 
 type MCPConfig struct {
@@ -114,28 +120,32 @@ func createDefaultConfig(configPath string) error {
 			LogLevel: "info",
 		},
 		LLM: LLMConfig{
-			Provider: "ollama",
+			Provider: constants.DefaultProvider,
 			Ollama: OllamaConfig{
 				BaseURL:      "http://localhost:11434",
-				DefaultModel: "llama3.2:latest",
+				DefaultModel: constants.DefaultModelName,
 			},
 			OpenAI: OpenAIConfig{
 				BaseURL:      "https://api.openai.com/v1",
 				DefaultModel: "gpt-3.5-turbo",
 			},
 			Eino: EinoConfig{
-				DefaultModel: "llama3.2:latest",
+				DefaultModel: constants.DefaultModelName,
 				Settings:     map[string]string{},
 			},
 			Settings: map[string]interface{}{
-				"timeout_seconds": 30,
-				"max_tokens":      2048,
+				"timeout_seconds": constants.DefaultTimeoutSeconds,
+				"max_tokens":      constants.DefaultMaxTokens,
 			},
 		},
 		UI: UIConfig{
-			WindowWidth:  600,
-			WindowHeight: 700,
-			MaxMessages:  10,
+			WindowWidth:    constants.DefaultWindowWidth, // Increased to accommodate session sidebar
+			WindowHeight:   constants.DefaultWindowHeight,
+			MaxMessages:    constants.DefaultMaxMessages,
+			Theme:          "auto",
+			FontSize:       constants.DefaultFontSize,
+			ShowTimestamps: false,
+			SidebarWidth:   constants.DefaultSidebarWidth,
 		},
 		MCP: MCPConfig{
 			Enabled: false,
@@ -179,4 +189,126 @@ func (c *Config) GetLogLevel() slog.Level {
 	default:
 		return slog.LevelInfo
 	}
+}
+
+// ValidateConfig validates the entire configuration structure
+func (c *Config) ValidateConfig() error {
+	// Validate App config
+	if c.App.Name == "" {
+		return fmt.Errorf("app.name cannot be empty")
+	}
+	if c.App.Version == "" {
+		return fmt.Errorf("app.version cannot be empty")
+	}
+
+	// Validate LLM config
+	if err := c.ValidateLLMConfig(); err != nil {
+		return fmt.Errorf("LLM config validation failed: %w", err)
+	}
+
+	// Validate UI config
+	if err := c.ValidateUIConfig(); err != nil {
+		return fmt.Errorf("UI config validation failed: %w", err)
+	}
+
+	return nil
+}
+
+// ValidateLLMConfig validates LLM provider configurations
+func (c *Config) ValidateLLMConfig() error {
+	if c.LLM.Provider == "" {
+		return fmt.Errorf("llm.provider cannot be empty")
+	}
+
+	// Validate that the current provider is in available providers
+	found := false
+	for _, provider := range c.LLM.AvailableProviders {
+		if provider == c.LLM.Provider {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("current provider '%s' not found in available_providers", c.LLM.Provider)
+	}
+
+	// Validate provider-specific configurations
+	switch c.LLM.Provider {
+	case "ollama":
+		if c.LLM.Ollama.BaseURL == "" {
+			return fmt.Errorf("ollama.base_url cannot be empty")
+		}
+		if c.LLM.Ollama.DefaultModel == "" {
+			return fmt.Errorf("ollama.default_model cannot be empty")
+		}
+	case "openai":
+		if c.LLM.OpenAI.BaseURL == "" {
+			return fmt.Errorf("openai.base_url cannot be empty")
+		}
+		if c.LLM.OpenAI.DefaultModel == "" {
+			return fmt.Errorf("openai.default_model cannot be empty")
+		}
+		// API key can be from environment variable, so we don't validate it here
+	case "eino":
+		if c.LLM.Eino.DefaultModel == "" {
+			return fmt.Errorf("eino.default_model cannot be empty")
+		}
+	default:
+		return fmt.Errorf("unsupported provider: %s", c.LLM.Provider)
+	}
+
+	return nil
+}
+
+// ValidateUIConfig validates UI configuration values
+func (c *Config) ValidateUIConfig() error {
+	// Validate numeric values
+	if err := validation.ValidateUIValues(
+		c.UI.WindowWidth,
+		c.UI.WindowHeight,
+		c.UI.MaxMessages,
+		c.UI.FontSize,
+		c.UI.SidebarWidth,
+	); err != nil {
+		return err
+	}
+
+	// Validate theme
+	validThemes := []string{"light", "dark", "auto"}
+	themeValid := false
+	for _, theme := range validThemes {
+		if c.UI.Theme == theme {
+			themeValid = true
+			break
+		}
+	}
+	if !themeValid {
+		return fmt.Errorf("ui.theme must be one of: %v", validThemes)
+	}
+
+	return nil
+}
+
+// ReloadConfig reloads configuration from file without restart
+func ReloadConfig(configPath string) (*Config, error) {
+	return LoadConfig(configPath)
+}
+
+// SaveConfig saves the current configuration to file
+func (c *Config) SaveConfig(configPath string) error {
+	if configPath == "" {
+		configPath = "configs/config.yaml"
+	}
+
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	return os.WriteFile(configPath, data, 0644)
 }

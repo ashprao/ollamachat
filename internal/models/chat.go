@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"time"
+
+	"github.com/ashprao/ollamachat/internal/constants"
+)
 
 // Model represents an LLM model
 type Model struct {
@@ -22,7 +26,12 @@ type ChatSession struct {
 	Messages  []ChatMessage `json:"messages"`
 	CreatedAt time.Time     `json:"created_at"`
 	UpdatedAt time.Time     `json:"updated_at"`
-	Model     string        `json:"model"`
+
+	// Session-specific preferences
+	Model       string  `json:"model"`        // Selected model for this session
+	Provider    string  `json:"provider"`     // Selected provider for this session
+	MaxMessages int     `json:"max_messages"` // Max context messages for this session
+	Temperature float64 `json:"temperature"`  // Model temperature setting
 }
 
 // NewChatMessage creates a new chat message with current timestamp
@@ -38,12 +47,31 @@ func NewChatMessage(sender, content string) ChatMessage {
 func NewChatSession(name, model string) ChatSession {
 	now := time.Now()
 	return ChatSession{
-		ID:        generateSessionID(),
-		Name:      name,
-		Messages:  []ChatMessage{},
-		CreatedAt: now,
-		UpdatedAt: now,
-		Model:     model,
+		ID:          generateSessionID(),
+		Name:        name,
+		Messages:    []ChatMessage{},
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Model:       model,
+		Provider:    constants.DefaultProvider,    // Default provider
+		MaxMessages: constants.DefaultMaxMessages, // Default max context messages
+		Temperature: constants.DefaultTemperature, // Default temperature
+	}
+}
+
+// NewChatSessionWithConfig creates a new chat session with configurable defaults
+func NewChatSessionWithConfig(name, model string, maxMessages int, temperature float64) ChatSession {
+	now := time.Now()
+	return ChatSession{
+		ID:          generateSessionID(),
+		Name:        name,
+		Messages:    []ChatMessage{},
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Model:       model,
+		Provider:    "ollama", // Default provider
+		MaxMessages: maxMessages,
+		Temperature: temperature,
 	}
 }
 
@@ -51,6 +79,23 @@ func NewChatSession(name, model string) ChatSession {
 func (cs *ChatSession) AddMessage(message ChatMessage) {
 	cs.Messages = append(cs.Messages, message)
 	cs.UpdatedAt = time.Now()
+}
+
+// UpdateSessionSettings updates the session-specific settings
+func (cs *ChatSession) UpdateSessionSettings(model, provider string, maxMessages int, temperature float64) {
+	cs.Model = model
+	cs.Provider = provider
+	cs.MaxMessages = maxMessages
+	cs.Temperature = temperature
+	cs.UpdatedAt = time.Now()
+}
+
+// GetContextMessages returns the last N messages for context, based on session settings
+func (cs *ChatSession) GetContextMessages() []ChatMessage {
+	if len(cs.Messages) <= cs.MaxMessages {
+		return cs.Messages
+	}
+	return cs.Messages[len(cs.Messages)-cs.MaxMessages:]
 }
 
 // generateSessionID generates a simple session ID (placeholder implementation)

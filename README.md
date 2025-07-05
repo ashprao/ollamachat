@@ -157,7 +157,7 @@ ui:
   window_height: 700
 ```
 
-Configuration can be modified by editing the YAML file or through the application preferences (stored in `data/preferences.json`).
+Configuration can be modified through the built-in settings dialog (accessible via the Settings button), by editing the YAML file directly, or through the application preferences (stored in `data/preferences.json`). The settings dialog provides real-time validation and immediate UI updates for window size, sidebar width, and session-specific settings like model selection and temperature.
 
 ## Future Capabilities & Extensibility
 
@@ -202,7 +202,8 @@ The application architecture is designed to support advanced features planned fo
 7. **Persistent Chat History**: Each session's chat history is automatically saved and restored. Sessions are stored individually for better organization.
 8. **Context Window for LLM**: The LLM receives previous messages as context (not just the latest message). By default, only the last 10 messages are sent for context.
 9. **Export Chat**: Use the "Save" button to export the current session's conversation as plain text.
-10. **Provider Information**: The current LLM provider is displayed in the interface, with infrastructure ready for provider switching.
+10. **Settings & Configuration**: Access the Settings dialog to configure window size, sidebar width, session-specific model selection, temperature, and other preferences with real-time validation.
+11. **Provider Information**: The current LLM provider is displayed in the interface, with infrastructure ready for provider switching.
 
 ## Architecture & Implementation
 

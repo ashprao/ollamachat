@@ -13,6 +13,8 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/ashprao/ollamachat/internal/config"
+	"github.com/ashprao/ollamachat/internal/constants"
 	"github.com/ashprao/ollamachat/internal/llm"
 	"github.com/ashprao/ollamachat/internal/models"
 	"github.com/ashprao/ollamachat/internal/storage"
@@ -24,10 +26,14 @@ type AppInterface interface {
 	SwitchProvider(providerType string) error
 	GetAvailableProviders() []string
 	GetCurrentProviderType() string
+	SaveConfig() error
+	GetConfigPath() string
+	UpdateWindowSize(width, height int)
+	UpdateFontSize(fontSize int)
 }
 
 // NewChatUI creates a new chat UI instance
-func NewChatUI(window fyne.Window, provider llm.Provider, storage storage.Storage, logger *logger.Logger, availableProviders []string, currentProviderType string) *ChatUI {
+func NewChatUI(window fyne.Window, provider llm.Provider, storage storage.Storage, logger *logger.Logger, availableProviders []string, currentProviderType string, config *config.Config, app AppInterface) *ChatUI {
 	ui := &ChatUI{
 		provider:            provider,
 		storage:             storage,
@@ -39,10 +45,12 @@ func NewChatUI(window fyne.Window, provider llm.Provider, storage storage.Storag
 		modelSelect:         widget.NewSelect([]string{}, nil),
 		availableProviders:  availableProviders,
 		currentProviderType: currentProviderType,
-		currentSession:      models.NewChatSession("Default Session", ""),
+		config:              config,
+		app:                 app,
+		currentSession:      models.NewChatSessionWithConfig("Default Session", "", DefaultMaxMessages, DefaultTemperature), // Use constants for initial session
 	}
 
-	ui.currentSession.ID = "default" // For backward compatibility
+	ui.currentSession.ID = "default" // For backward compatibility - TBD: remove later
 	ui.logger.Info("Chat UI created")
 	return ui
 }
@@ -56,25 +64,32 @@ type ChatUI struct {
 	availableProviders  []string
 	currentProviderType string
 
+	// Configuration and app reference
+	config *config.Config
+	app    AppInterface
+
 	// UI components
-	window          fyne.Window
-	chatContainer   *fyne.Container
-	scrollContainer *container.Scroll
-	inputField      *widget.Entry
-	statusLabel     *widget.Label
-	modelSelect     *widget.Select
-	providerSelect  *widget.Select
-	providerLabel   *widget.Label
-	sendButton      *widget.Button
-	clearButton     *widget.Button
-	saveButton      *widget.Button
-	cancelButton    *widget.Button
+	window            fyne.Window
+	chatContainer     *fyne.Container
+	scrollContainer   *container.Scroll
+	inputField        *widget.Entry
+	statusLabel       *widget.Label
+	modelSelect       *widget.Select
+	providerSelect    *widget.Select
+	providerLabel     *widget.Label
+	sessionModelLabel *widget.Label // Indicates when session has specific model
+	sendButton        *widget.Button
+	clearButton       *widget.Button
+	saveButton        *widget.Button
+	cancelButton      *widget.Button
+	settingsButton    *widget.Button
 
 	// Session management UI
 	sessionList      *widget.List
 	newSessionButton *widget.Button
 	sessionSidebar   *fyne.Container
 	sessions         []models.ChatSession
+	mainSplit        *container.Split // Store reference to main split container
 
 	// State
 	cancelFunc      context.CancelFunc
@@ -126,7 +141,6 @@ func (ui *ChatUI) setupUI() {
 	ui.initButtons()
 	ui.initProviderUI()
 	ui.setupSessionSidebar()
-	ui.initProviderUI()
 
 	// Create model selection container
 	modelSelectContainer := container.NewGridWrap(
@@ -138,7 +152,7 @@ func (ui *ChatUI) setupUI() {
 	statusArea := container.NewBorder(nil, nil, nil, ui.cancelButton, ui.statusLabel)
 
 	// Button area
-	buttons := container.NewVBox(ui.sendButton, ui.clearButton, ui.saveButton, ui.createQuitButton())
+	buttons := container.NewVBox(ui.sendButton, ui.clearButton, ui.saveButton, ui.settingsButton, ui.createQuitButton())
 
 	// Input area
 	inputArea := container.NewBorder(nil, nil, nil, buttons, ui.inputField)
@@ -153,7 +167,12 @@ func (ui *ChatUI) setupUI() {
 	chatContent := container.NewBorder(
 		statusArea,
 		container.NewVBox(
-			container.NewHBox(ui.providerLabel, modelSelectContainer, widget.NewLabel("Model to be used.")),
+			container.NewHBox(
+				ui.providerLabel,
+				modelSelectContainer,
+				widget.NewLabel("Model to be used."),
+				ui.sessionModelLabel,
+			),
 			inputArea,
 		),
 		nil,
@@ -162,10 +181,22 @@ func (ui *ChatUI) setupUI() {
 	)
 
 	// Main layout with resizable session sidebar
-	mainContent := container.NewHSplit(ui.sessionSidebar, chatContent)
-	mainContent.SetOffset(0.25) // Sidebar takes 25% of width initially
+	ui.mainSplit = container.NewHSplit(ui.sessionSidebar, chatContent)
 
-	ui.window.SetContent(mainContent)
+	// Calculate sidebar offset based on config (as percentage of total width)
+	totalWidth := float64(ui.config.UI.WindowWidth)
+	sidebarWidth := float64(ui.config.UI.SidebarWidth)
+	offset := sidebarWidth / totalWidth
+
+	// Ensure offset is within reasonable bounds (10% to 50%)
+	if offset < 0.1 {
+		offset = 0.1
+	} else if offset > 0.5 {
+		offset = 0.5
+	}
+
+	ui.mainSplit.SetOffset(offset)
+	ui.window.SetContent(ui.mainSplit)
 }
 
 // setupModelSelection loads available models and sets up the model selector
@@ -179,7 +210,6 @@ func (ui *ChatUI) setupModelSelection() error {
 
 	modelNames := ui.extractModelNames(models)
 	ui.modelSelect.Options = modelNames
-	ui.modelSelect.OnChanged = ui.onModelSelect
 	ui.modelSelect.Refresh()
 
 	// Load saved model preference
@@ -189,15 +219,32 @@ func (ui *ChatUI) setupModelSelection() error {
 		prefs = storage.NewDefaultAppPreferences()
 	}
 
-	// Set selected model
-	savedModel := prefs.DefaultModel
-	if savedModel == "" {
-		savedModel = "llama3.2:latest"
+	// Determine which model to select based on session preference or global default
+	var selectedModel string
+	if ui.currentSession.Model != "" {
+		// Session has a specific model preference - use it
+		selectedModel = ui.currentSession.Model
+		ui.logger.Info("Using session-specific model at startup", "session_id", ui.currentSession.ID, "model", selectedModel)
+	} else {
+		// Session has no specific model preference - use global default
+		savedModel := prefs.DefaultModel
+		if savedModel == "" {
+			savedModel = getDefaultModel()
+		}
+		selectedModel = savedModel
+		ui.logger.Info("Using global default model at startup", "session_id", ui.currentSession.ID, "model", selectedModel)
 	}
-	ui.modelSelect.SetSelected(savedModel)
+
+	ui.modelSelect.SetSelected(selectedModel)
+
+	// Set the OnChanged callback AFTER the initial selection to prevent triggering during setup
+	ui.modelSelect.OnChanged = ui.onModelSelect
+
+	// Update session model indicator
+	ui.updateSessionModelIndicator()
 
 	ui.window.Content().Refresh()
-	ui.logger.Info("Model selection setup completed", "model_count", len(models), "selected_model", savedModel)
+	ui.logger.Info("Model selection setup completed", "model_count", len(models), "selected_model", selectedModel)
 	return nil
 }
 
@@ -207,6 +254,7 @@ func (ui *ChatUI) initButtons() {
 	ui.clearButton = widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), ui.onClearButtonTapped)
 	ui.saveButton = widget.NewButtonWithIcon("Save", theme.DocumentSaveIcon(), ui.onSaveButtonTapped)
 	ui.cancelButton = widget.NewButtonWithIcon("Cancel", theme.CancelIcon(), ui.onCancelButtonTapped)
+	ui.settingsButton = widget.NewButtonWithIcon("Settings", theme.SettingsIcon(), ui.onSettingsButtonTapped)
 	ui.cancelButton.Hide()
 	ui.disableUtilityButtons()
 }
@@ -225,6 +273,12 @@ func (ui *ChatUI) initProviderUI() {
 	if len(ui.availableProviders) <= 1 {
 		ui.providerSelect.Hide()
 	}
+
+	// Session-specific model indicator
+	ui.sessionModelLabel = widget.NewLabel("📌 Session-specific model")
+	ui.sessionModelLabel.TextStyle = fyne.TextStyle{Italic: true}
+	ui.sessionModelLabel.Importance = widget.MediumImportance
+	ui.sessionModelLabel.Hide() // Initially hidden
 }
 
 // loadCurrentSession loads the most recent chat session from storage
@@ -237,7 +291,10 @@ func (ui *ChatUI) loadCurrentSession() error {
 	}
 
 	// No existing sessions, create a new one
-	ui.currentSession = models.NewChatSession(fmt.Sprintf("Session %s", time.Now().Format("15:04")), "")
+	ui.currentSession = ui.createNewSessionWithDefaults(
+		generateDefaultSessionName(),
+		"",
+	)
 	ui.autoSaveCurrentSession()
 	ui.logger.Info("Created new session", "session_id", ui.currentSession.ID)
 	return nil
@@ -285,7 +342,7 @@ func (ui *ChatUI) onSendButtonTapped() {
 	ui.cancelFunc = cancelFunc
 
 	// Build prompt with history
-	fullPrompt := ui.buildPromptWithHistory(query, 10)
+	fullPrompt := ui.buildPromptWithHistory(query, ui.currentSession.MaxMessages)
 	go ui.sendMessageToLLM(ctx, selectedModel, fullPrompt)
 }
 
@@ -350,12 +407,21 @@ func (ui *ChatUI) onModelSelect(selected string) {
 		prefs = storage.NewDefaultAppPreferences()
 	}
 
+	// Update global preference
 	prefs.DefaultModel = selected
 	if err := ui.storage.SaveAppPreferences(ctx, prefs); err != nil {
 		ui.logger.Error("Failed to save model preference", "error", err)
 	}
 
-	ui.logger.Info("Model selected", "model", selected)
+	// Clear any session-specific model preference (session now uses global)
+	ui.currentSession.Model = ""
+	ui.logger.Info("Model selected - set as global preference, cleared session-specific preference", "model", selected, "session_id", ui.currentSession.ID)
+
+	// Update session model indicator (should be hidden since session now uses global)
+	ui.updateSessionModelIndicator()
+
+	// Auto-save the session with the cleared session-specific preference
+	ui.autoSaveCurrentSession()
 }
 
 // onProviderSelected handles provider selection changes
@@ -372,14 +438,47 @@ func (ui *ChatUI) onProviderSelected(selected string) {
 		ui.window)
 }
 
+// onSettingsButtonTapped handles settings button click
+func (ui *ChatUI) onSettingsButtonTapped() {
+	ui.logger.Info("Opening settings dialog")
+
+	// Get available models for the current provider
+	ctx := context.Background()
+	models, err := ui.provider.GetModels(ctx)
+	if err != nil {
+		ui.logger.Error("Failed to get models for settings", "error", err)
+		dialog.ShowError(fmt.Errorf("failed to get available models: %w", err), ui.window)
+		return
+	}
+
+	// Convert models to string slice
+	modelNames := make([]string, len(models))
+	for i, model := range models {
+		modelNames[i] = model.Name
+	}
+
+	// Create and show settings dialog
+	settingsDialog := NewSettingsDialog(
+		ui.window,
+		ui.config,
+		&ui.currentSession,
+		ui.logger,
+		modelNames,
+		ui,
+		ui.app,
+	)
+
+	settingsDialog.Show()
+}
+
 // UpdateProvider updates the UI to use a new provider
 func (ui *ChatUI) UpdateProvider(newProvider llm.Provider) {
 	ui.provider = newProvider
 
 	// Update current provider type based on provider name
 	providerName := newProvider.GetName()
-	if strings.Contains(strings.ToLower(providerName), "ollama") {
-		ui.currentProviderType = "ollama"
+	if strings.Contains(strings.ToLower(providerName), DefaultProvider) {
+		ui.currentProviderType = DefaultProvider
 	} else if strings.Contains(strings.ToLower(providerName), "openai") {
 		ui.currentProviderType = "openai"
 	} else if strings.Contains(strings.ToLower(providerName), "eino") {
@@ -408,6 +507,121 @@ func (ui *ChatUI) refreshProviderInfo() {
 	ui.logger.Info("Provider info refreshed", "provider", ui.provider.GetName())
 }
 
+// UpdateConfig updates the ChatUI configuration
+func (ui *ChatUI) UpdateConfig(newConfig *config.Config) {
+	ui.config = newConfig
+	ui.logger.Info("ChatUI configuration updated")
+}
+
+// UpdateModelSelection updates the main UI model selector when changed from settings
+// This is called from settings dialog and creates a session-specific preference
+func (ui *ChatUI) UpdateModelSelection(newModel string) {
+	ui.logger.Info("Updating model selection from settings - setting as session-specific", "model", newModel, "session_id", ui.currentSession.ID)
+
+	// Use utility function to set model without triggering callback
+	ui.setModelSelectWithoutCallback(newModel)
+
+	// Note: The session-specific model is already set by the settings dialog
+	// Update session model indicator to show it's session-specific
+	ui.updateSessionModelIndicator()
+}
+
+// UpdateSidebarWidth updates the sidebar width based on configuration
+func (ui *ChatUI) UpdateSidebarWidth(sidebarWidth int) {
+	if ui.mainSplit == nil {
+		ui.logger.Warn("Main split container not initialized")
+		return
+	}
+
+	// Calculate new offset based on current window size
+	totalWidth := float64(ui.config.UI.WindowWidth)
+	sidebarWidthFloat := float64(sidebarWidth)
+	offset := sidebarWidthFloat / totalWidth
+
+	// Ensure offset is within reasonable bounds (10% to 50%)
+	if offset < 0.1 {
+		offset = 0.1
+	} else if offset > 0.5 {
+		offset = 0.5
+	}
+
+	ui.mainSplit.SetOffset(offset)
+	ui.logger.Info("Updated sidebar width", "width", sidebarWidth, "offset", offset)
+}
+
+// Utility functions to reduce code duplication
+
+// setModelSelectWithoutCallback safely sets the model selector without triggering the OnChanged callback
+func (ui *ChatUI) setModelSelectWithoutCallback(model string) {
+	if ui.modelSelect == nil {
+		return
+	}
+
+	originalCallback := ui.modelSelect.OnChanged
+	ui.modelSelect.OnChanged = nil
+	ui.modelSelect.SetSelected(model)
+	ui.modelSelect.OnChanged = originalCallback
+}
+
+// loadGlobalModelPreference loads the global model preference from storage with fallback
+func (ui *ChatUI) loadGlobalModelPreference(ctx context.Context) string {
+	prefs, err := ui.storage.LoadAppPreferences(ctx)
+	if err != nil {
+		ui.logger.Warn("Failed to load preferences, using fallback", "error", err)
+		prefs = storage.NewDefaultAppPreferences()
+	}
+
+	globalModel := prefs.DefaultModel
+	if globalModel == "" {
+		globalModel = getDefaultModel()
+	}
+
+	return globalModel
+}
+
+// getDefaultModel returns the default model name
+func getDefaultModel() string {
+	return DefaultModelName
+}
+
+// getDefaultTemperature returns the default temperature value
+func getDefaultTemperature() float64 {
+	return DefaultTemperature
+}
+
+// updateModelSelectionForSession updates the model selector based on session preference or global default
+func (ui *ChatUI) updateModelSelectionForSession() {
+	if ui.currentSession.Model != "" {
+		// Session has a specific model preference - use it
+		ui.logger.Info("Using session-specific model", "session_id", ui.currentSession.ID, "model", ui.currentSession.Model)
+		ui.setModelSelectWithoutCallback(ui.currentSession.Model)
+	} else {
+		// Session has no specific model preference - load and set global default
+		ctx := context.Background()
+		globalModel := ui.loadGlobalModelPreference(ctx)
+		ui.logger.Info("Session has no specific model preference, loading global model", "session_id", ui.currentSession.ID, "global_model", globalModel)
+		ui.setModelSelectWithoutCallback(globalModel)
+	}
+
+	// Update session model indicator
+	ui.updateSessionModelIndicator()
+}
+
+// createNewSessionWithDefaults creates a new session with default values from config
+func (ui *ChatUI) createNewSessionWithDefaults(name string, model string) models.ChatSession {
+	maxMessages := ui.config.UI.MaxMessages
+	if maxMessages <= 0 {
+		maxMessages = DefaultMaxMessages // Fallback default
+	}
+
+	return models.NewChatSessionWithConfig(
+		name,
+		model,
+		maxMessages,
+		getDefaultTemperature(),
+	)
+}
+
 // Helper methods
 
 func (ui *ChatUI) extractModelNames(models []models.Model) []string {
@@ -416,6 +630,11 @@ func (ui *ChatUI) extractModelNames(models []models.Model) []string {
 		modelNames[i] = model.Name
 	}
 	return modelNames
+}
+
+// generateDefaultSessionName creates a default session name with timestamp
+func generateDefaultSessionName() string {
+	return fmt.Sprintf("Session %s", time.Now().Format("15:04"))
 }
 
 func (ui *ChatUI) calculateModelSelectWidth() float32 {
@@ -432,19 +651,47 @@ func (ui *ChatUI) calculateModelSelectWidth() float32 {
 	return canvas.NewText(longestModel, nil).MinSize().Width
 }
 
+// createMessageCardWithTimestamp creates a message card with consistent styling
+func (ui *ChatUI) createMessageCardWithTimestamp(title, content string, timestamp time.Time) *widget.Card {
+	richText := widget.NewRichTextFromMarkdown(content)
+	richText.Wrapping = fyne.TextWrapWord
+
+	// Create title label with bold style
+	titleLabel := widget.NewLabel(title)
+	titleLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	if ui.config.UI.ShowTimestamps {
+		// Create timestamp label with smaller, muted style
+		timestampStr := timestamp.Format(TimestampFormat)
+		timestampLabel := widget.NewLabel(timestampStr)
+		timestampLabel.TextStyle = fyne.TextStyle{Italic: true}
+		timestampLabel.Importance = widget.LowImportance
+
+		// Create header with title and timestamp
+		header := container.NewHBox(
+			titleLabel,
+			widget.NewLabel("•"), // Separator
+			timestampLabel,
+		)
+
+		return widget.NewCard("", "", container.NewVBox(header, richText))
+	} else {
+		// Create card without timestamp
+		return widget.NewCard("", "", container.NewVBox(titleLabel, richText))
+	}
+}
+
 func (ui *ChatUI) addMessageCard(content string, isUserMessage, saveToHistory bool) *widget.Card {
 	var title, sender string
 	if isUserMessage {
-		title = "You:"
+		title = UserMessageTitle
 		sender = "user"
 	} else {
-		title = "LLM:"
+		title = LLMMessageTitle
 		sender = "llm"
 	}
 
-	richText := widget.NewRichTextFromMarkdown(content)
-	richText.Wrapping = fyne.TextWrapWord
-	messageCard := widget.NewCard(title, "", richText)
+	messageCard := ui.createMessageCardWithTimestamp(title, content, time.Now())
 	ui.chatContainer.Add(messageCard)
 	ui.enableUtilityButtons()
 
@@ -452,10 +699,31 @@ func (ui *ChatUI) addMessageCard(content string, isUserMessage, saveToHistory bo
 		message := models.NewChatMessage(sender, content)
 		ui.currentSession.AddMessage(message)
 
-		// Update session model if user message and model is selected
-		if isUserMessage && ui.modelSelect.Selected != "" {
-			ui.currentSession.Model = ui.modelSelect.Selected
-		}
+		// Auto-save session
+		ui.autoSaveCurrentSession()
+
+		// Refresh sessions list to show updated timestamp
+		go ui.refreshSessionsList()
+	}
+
+	return messageCard
+}
+
+// addMessageCardFromChatMessage creates a message card from a ChatMessage with optional timestamp
+func (ui *ChatUI) addMessageCardFromChatMessage(msg models.ChatMessage, saveToHistory bool) *widget.Card {
+	var title string
+	if msg.Sender == "user" {
+		title = UserMessageTitle
+	} else {
+		title = LLMMessageTitle
+	}
+
+	messageCard := ui.createMessageCardWithTimestamp(title, msg.Content, msg.Timestamp)
+	ui.chatContainer.Add(messageCard)
+	ui.enableUtilityButtons()
+
+	if saveToHistory {
+		ui.currentSession.AddMessage(msg)
 
 		// Auto-save session
 		ui.autoSaveCurrentSession()
@@ -498,8 +766,21 @@ func (ui *ChatUI) clearProcessingStatus() {
 }
 
 func (ui *ChatUI) updateRichText(card *widget.Card, content string) {
+	// First, try the old direct RichText format (for backward compatibility)
 	if richText, ok := card.Content.(*widget.RichText); ok {
 		richText.ParseMarkdown(content)
+		return
+	}
+
+	// Then, try the new container format (VBox with header + richText)
+	if vbox, ok := card.Content.(*fyne.Container); ok {
+		// The RichText widget is the last item in the VBox
+		if len(vbox.Objects) > 0 {
+			if richText, ok := vbox.Objects[len(vbox.Objects)-1].(*widget.RichText); ok {
+				richText.ParseMarkdown(content)
+				return
+			}
+		}
 	}
 }
 
@@ -552,7 +833,10 @@ func (ui *ChatUI) sendMessageToLLM(ctx context.Context, selectedModel, query str
 		return offset >= maxOffset-50
 	}
 
-	err := ui.provider.SendQuery(ctx, selectedModel, query, func(chunk string, newStream bool) {
+	err := ui.provider.SendQueryWithOptions(ctx, selectedModel, query, llm.QueryOptions{
+		Temperature: ui.currentSession.Temperature,
+		MaxTokens:   ui.getMaxTokensFromConfig(),
+	}, func(chunk string, newStream bool) {
 		autoScroll := shouldAutoScroll()
 		if newStream {
 			llmResponse = chunk
@@ -679,7 +963,7 @@ func (ui *ChatUI) setupSessionSidebar() {
 	sidebarWithPadding := container.NewPadded(sidebarContent)
 
 	// Create a vertical separator line for elegant border
-	separator := canvas.NewLine(theme.SeparatorColor())
+	separator := canvas.NewLine(theme.Color(theme.ColorNameSeparator))
 	separator.StrokeWidth = 1
 
 	ui.sessionSidebar = container.NewBorder(
@@ -696,8 +980,11 @@ func (ui *ChatUI) onNewSessionTapped() {
 		return
 	}
 
-	// Create new session
-	newSession := models.NewChatSession(fmt.Sprintf("Session %s", time.Now().Format("15:04")), ui.modelSelect.Selected)
+	// Create new session with config defaults (no specific model preference initially)
+	newSession := ui.createNewSessionWithDefaults(
+		generateDefaultSessionName(),
+		"", // No specific model preference - will use global selection
+	)
 
 	// Save the new session immediately
 	ui.currentSession = newSession
@@ -712,6 +999,9 @@ func (ui *ChatUI) onNewSessionTapped() {
 
 	// Update session selection using helper method
 	ui.updateSessionSelection(newSession)
+
+	// Update session model indicator (should be hidden since new session has no specific model)
+	ui.updateSessionModelIndicator()
 
 	ui.logger.Info("Created new session", "session_id", newSession.ID, "session_name", newSession.Name)
 }
@@ -736,8 +1026,17 @@ func (ui *ChatUI) onSessionSelected(id widget.ListItemID) {
 		return
 	}
 
+	// Load the latest version of the selected session from storage to ensure we have any recent updates
+	ctx := context.Background()
+	latestSession, err := ui.storage.LoadChatSession(ctx, selectedSession.ID)
+	if err != nil {
+		ui.logger.Error("Failed to load latest session data", "session_id", selectedSession.ID, "error", err)
+		// Fall back to the session from the list if loading fails
+		latestSession = selectedSession
+	}
+
 	// Switch to selected session using the helper method
-	ui.updateSessionSelection(selectedSession)
+	ui.updateSessionSelection(latestSession)
 
 	// Clear and reload UI
 	ui.chatContainer.Objects = nil
@@ -749,9 +1048,14 @@ func (ui *ChatUI) onSessionSelected(id widget.ListItemID) {
 		ui.addMessageCard(msg.Content, isUserMessage, false)
 	}
 
-	// Update model selection if session has a saved model
-	if ui.currentSession.Model != "" {
-		ui.modelSelect.SetSelected(ui.currentSession.Model)
+	// Update model selection based on session preference or load global default
+	ui.updateModelSelectionForSession()
+
+	// Enable utility buttons if session has messages
+	if len(ui.currentSession.Messages) > 0 {
+		ui.enableUtilityButtons()
+	} else {
+		ui.disableUtilityButtons()
 	}
 
 	ui.scrollContainer.ScrollToBottom()
@@ -812,7 +1116,10 @@ func (ui *ChatUI) deleteCurrentSession() {
 	// If no sessions remain, create a new session
 	if len(sessions) == 0 {
 		ui.logger.Info("No sessions remaining, creating new session")
-		newSession := models.NewChatSession(fmt.Sprintf("Session %s", time.Now().Format("15:04")), ui.currentSession.Model)
+		newSession := ui.createNewSessionWithDefaults(
+			generateDefaultSessionName(),
+			ui.currentSession.Model,
+		)
 		ui.currentSession = newSession
 		ui.autoSaveCurrentSession()
 	} else {
@@ -833,8 +1140,11 @@ func (ui *ChatUI) deleteCurrentSession() {
 
 	// Update model selection if session has a saved model
 	if ui.currentSession.Model != "" {
-		ui.modelSelect.SetSelected(ui.currentSession.Model)
+		ui.setModelSelectWithoutCallback(ui.currentSession.Model)
 	}
+
+	// Update session model indicator
+	ui.updateSessionModelIndicator()
 
 	ui.scrollContainer.ScrollToBottom()
 
@@ -850,7 +1160,13 @@ func (ui *ChatUI) deleteCurrentSession() {
 		}
 	}()
 
-	ui.disableUtilityButtons()
+	// Enable utility buttons if the current session has messages
+	if len(ui.currentSession.Messages) > 0 {
+		ui.enableUtilityButtons()
+	} else {
+		ui.disableUtilityButtons()
+	}
+
 	ui.window.Content().Refresh()
 	ui.logger.Info("Session deleted successfully", "deleted_session_id", sessionID, "current_session_id", ui.currentSession.ID)
 }
@@ -862,13 +1178,41 @@ func (ui *ChatUI) loadCurrentSessionMessages() {
 
 	// Load messages from current session
 	for _, msg := range ui.currentSession.Messages {
-		isUserMessage := msg.Sender == "user"
-		ui.addMessageCard(msg.Content, isUserMessage, false)
+		ui.addMessageCardFromChatMessage(msg, false)
 	}
 
-	// Update model selection if session has a saved model
+	// Update model selection based on session preference or load global default
 	if ui.currentSession.Model != "" && ui.modelSelect != nil {
-		ui.modelSelect.SetSelected(ui.currentSession.Model)
+		// Session has a specific model preference - use it
+		ui.logger.Info("Loading session with specific model", "session_id", ui.currentSession.ID, "model", ui.currentSession.Model)
+
+		// Use utility function to set model without triggering callback
+		ui.setModelSelectWithoutCallback(ui.currentSession.Model)
+	} else {
+		// Session has no specific model preference - load and set global default
+		ctx := context.Background()
+		prefs, err := ui.storage.LoadAppPreferences(ctx)
+		if err != nil {
+			ui.logger.Warn("Failed to load preferences, using fallback", "error", err)
+			prefs = storage.NewDefaultAppPreferences()
+		}
+
+		globalModel := prefs.DefaultModel
+		if globalModel == "" {
+			globalModel = getDefaultModel()
+		}
+
+		ui.logger.Info("Loading session with no specific model, setting global model", "session_id", ui.currentSession.ID, "global_model", globalModel)
+
+		// Use utility function to set model without triggering callback
+		ui.setModelSelectWithoutCallback(globalModel)
+	}
+
+	// Enable utility buttons if session has messages
+	if len(ui.currentSession.Messages) > 0 {
+		ui.enableUtilityButtons()
+	} else {
+		ui.disableUtilityButtons()
 	}
 
 	ui.chatContainer.Refresh()
@@ -895,4 +1239,42 @@ func (ui *ChatUI) updateSessionSelection(newSession models.ChatSession) {
 	}
 
 	ui.logger.Info("Updated session selection", "session_id", newSession.ID, "session_name", newSession.Name)
+}
+
+// UpdateFontSize updates font size throughout the UI (called when settings change)
+func (ui *ChatUI) UpdateFontSize(fontSize int) {
+	ui.logger.Info("Font size update requested", "size", fontSize)
+	// Font size is now handled at the app theme level
+	// This method can be used for any UI-specific font size updates if needed
+}
+
+// RefreshMessageDisplay refreshes the chat display with current timestamp settings
+func (ui *ChatUI) RefreshMessageDisplay() {
+	ui.loadCurrentSessionMessages()
+}
+
+// updateSessionModelIndicator shows/hides the session-specific model indicator
+func (ui *ChatUI) updateSessionModelIndicator() {
+	if ui.sessionModelLabel == nil {
+		return
+	}
+
+	if ui.currentSession.Model != "" {
+		ui.sessionModelLabel.Show()
+		ui.logger.Debug("Showing session-specific model indicator", "session_id", ui.currentSession.ID, "model", ui.currentSession.Model)
+	} else {
+		ui.sessionModelLabel.Hide()
+		ui.logger.Debug("Hiding session-specific model indicator", "session_id", ui.currentSession.ID)
+	}
+}
+
+// getMaxTokensFromConfig extracts max_tokens from LLM config settings
+func (ui *ChatUI) getMaxTokensFromConfig() int {
+	if maxTokensValue, ok := ui.config.LLM.Settings["max_tokens"]; ok {
+		if maxTokens, ok := maxTokensValue.(int); ok {
+			return maxTokens
+		}
+	}
+	// Fallback to default
+	return constants.DefaultMaxTokens
 }

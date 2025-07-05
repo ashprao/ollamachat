@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 
+	"github.com/ashprao/ollamachat/internal/constants"
 	"github.com/ashprao/ollamachat/internal/models"
 )
 
@@ -16,6 +17,9 @@ type Provider interface {
 
 	// SendQuery sends a query to the LLM and streams the response
 	SendQuery(ctx context.Context, model, query string, onUpdate StreamCallback) error
+
+	// SendQueryWithOptions sends a query with additional options (temperature, etc.)
+	SendQueryWithOptions(ctx context.Context, model, query string, options QueryOptions, onUpdate StreamCallback) error
 
 	// GetName returns the provider name
 	GetName() string
@@ -39,4 +43,18 @@ type ProviderConfig struct {
 type ProviderFactory interface {
 	CreateProvider(config ProviderConfig) (Provider, error)
 	SupportedProviders() []string
+}
+
+// QueryOptions holds additional parameters for LLM queries
+type QueryOptions struct {
+	Temperature float64
+	MaxTokens   int
+}
+
+// DefaultQueryOptions returns default query options
+func DefaultQueryOptions() QueryOptions {
+	return QueryOptions{
+		Temperature: constants.DefaultTemperature,
+		MaxTokens:   constants.DefaultMaxTokens,
+	}
 }

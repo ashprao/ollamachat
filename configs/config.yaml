@@ -1,45 +1,39 @@
 app:
-  name: "OllamaChat"
-  version: "1.0.0"
-  log_level: "info"
-
+    name: OllamaChat
+    version: 1.0.0
+    log_level: info
 llm:
-  provider: "ollama"  # Current active provider
-  available_providers: ["ollama"]  # List of configured providers
-  ollama:
-    base_url: "http://localhost:11434"
-    default_model: "llama3.2:latest"
-  openai:
-    base_url: "https://api.openai.com/v1"
-    default_model: "gpt-3.5-turbo"
-    # api_key: ""  # Set via OPENAI_API_KEY environment variable
-  eino:
-    default_model: "llama3.2:latest"
-    settings: {}
-  settings:
-    timeout_seconds: 60
-    max_tokens: 2048
-
+    provider: ollama
+    available_providers:
+        - ollama
+    ollama:
+        base_url: http://localhost:11434
+        default_model: llama3.2:latest
+    openai:
+        api_key: ""
+        base_url: https://api.openai.com/v1
+        default_model: gpt-3.5-turbo
+    eino:
+        default_model: llama3.2:latest
+        settings: {}
+    settings:
+        max_tokens: 2048
+        timeout_seconds: 60
 ui:
-  window_width: 800  # Increased to accommodate session sidebar
-  window_height: 700
-  max_messages: 10
-
+    window_width: 800
+    window_height: 700
+    max_messages: 10
+    theme: auto
+    font_size: 12
+    show_timestamps: true
+    sidebar_width: 200
 mcp:
-  enabled: false
-  servers: []
-    # Example MCP server configuration:
-    # - name: "filesystem"
-    #   command: "npx"
-    #   args: ["@modelcontextprotocol/server-filesystem", "/path/to/allowed/directory"]
-    #   env:
-    #     NODE_ENV: "production"
-    #   enabled: true
-
+    enabled: false
+    servers: []
 agent:
-  enabled: false
-  framework: "eino"  # "eino", "custom"
-  default_agent: "chat_agent"
-  settings:
-    max_iterations: 10
-    timeout: "30s"
+    enabled: false
+    framework: eino
+    default_agent: chat_agent
+    settings:
+        max_iterations: 10
+        timeout: 30s

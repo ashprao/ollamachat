@@ -30,7 +30,26 @@ func NewOllamaProvider(baseURL string, logger *logger.Logger) *OllamaProvider {
 	return &OllamaProvider{
 		baseURL: baseURL,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 30 * time.Second, // Default timeout, will be overridden by factory
+		},
+		logger: logger.WithComponent("ollama-provider"),
+	}
+}
+
+// NewOllamaProviderWithTimeout creates a new Ollama provider instance with configurable timeout
+func NewOllamaProviderWithTimeout(baseURL string, timeoutSeconds int, logger *logger.Logger) *OllamaProvider {
+	if baseURL == "" {
+		baseURL = "http://localhost:11434"
+	}
+
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 30 // Fallback to default
+	}
+
+	return &OllamaProvider{
+		baseURL: baseURL,
+		httpClient: &http.Client{
+			Timeout: time.Duration(timeoutSeconds) * time.Second,
 		},
 		logger: logger.WithComponent("ollama-provider"),
 	}
@@ -103,6 +122,56 @@ func (o *OllamaProvider) SendQuery(ctx context.Context, model, query string, onU
 		"model":  model,
 		"prompt": query,
 		"stream": true, // Enable streaming
+	}
+
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		o.logger.Error("Failed to marshal request body", "error", err)
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", o.baseURL+"/api/generate", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		o.logger.Error("Failed to create request", "error", err)
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := o.httpClient.Do(req)
+	if err != nil {
+		o.logger.Error("Failed to send request to Ollama", "error", err)
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		o.logger.Error("Unexpected status code from Ollama", "status_code", resp.StatusCode)
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	return o.handleStreamingResponse(resp.Body, onUpdate)
+}
+
+// SendQueryWithOptions sends a query with additional options like temperature
+func (o *OllamaProvider) SendQueryWithOptions(ctx context.Context, model, query string, options QueryOptions, onUpdate StreamCallback) error {
+	o.logger.Info("Sending query to Ollama with options",
+		"model", model,
+		"query_length", len(query),
+		"temperature", options.Temperature)
+
+	requestBody := map[string]interface{}{
+		"model":  model,
+		"prompt": query,
+		"stream": true, // Enable streaming
+		"options": map[string]interface{}{
+			"temperature": options.Temperature,
+		},
+	}
+
+	// Add max tokens if specified
+	if options.MaxTokens > 0 {
+		requestBody["options"].(map[string]interface{})["num_predict"] = options.MaxTokens
 	}
 
 	jsonBody, err := json.Marshal(requestBody)
