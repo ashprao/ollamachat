@@ -157,6 +157,17 @@ ui:
   window_height: 700
 ```
 
+### Configuration Precedence
+
+The application follows a clear configuration hierarchy to ensure predictable behavior:
+
+1. **YAML Configuration** (`configs/config.yaml`) - **Highest Priority**: Values defined in the YAML file always take precedence
+2. **Application Defaults** (`internal/constants/defaults.go`) - **Fallback Only**: Used only when YAML values are missing or invalid
+
+This design ensures that explicit configuration choices in `config.yaml` are always respected, with defaults serving only as a safety net. All settings (timeouts, max tokens, UI dimensions, etc.) follow this precedence model.
+
+### Configuration Management
+
 Configuration can be modified through the built-in settings dialog (accessible via the Settings button), by editing the YAML file directly, or through the application preferences (stored in `data/preferences.json`). The settings dialog provides real-time validation and immediate UI updates for window size, sidebar width, and session-specific settings like model selection and temperature.
 
 ## Future Capabilities & Extensibility

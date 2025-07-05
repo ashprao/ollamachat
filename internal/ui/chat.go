@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,6 +84,7 @@ type ChatUI struct {
 	saveButton        *widget.Button
 	cancelButton      *widget.Button
 	settingsButton    *widget.Button
+	quitButton        *widget.Button
 
 	// Session management UI
 	sessionList      *widget.List
@@ -151,8 +153,8 @@ func (ui *ChatUI) setupUI() {
 	// Status area with cancel button
 	statusArea := container.NewBorder(nil, nil, nil, ui.cancelButton, ui.statusLabel)
 
-	// Button area
-	buttons := container.NewVBox(ui.sendButton, ui.clearButton, ui.saveButton, ui.settingsButton, ui.createQuitButton())
+	// Button area - Group by importance: High, Medium (grouped together), Danger
+	buttons := container.NewVBox(ui.sendButton, ui.saveButton, ui.clearButton, ui.settingsButton, ui.quitButton)
 
 	// Input area
 	inputArea := container.NewBorder(nil, nil, nil, buttons, ui.inputField)
@@ -251,12 +253,31 @@ func (ui *ChatUI) setupModelSelection() error {
 // initButtons creates and configures all buttons
 func (ui *ChatUI) initButtons() {
 	ui.sendButton = widget.NewButtonWithIcon("Send", theme.ConfirmIcon(), ui.onSendButtonTapped)
-	ui.clearButton = widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), ui.onClearButtonTapped)
+	ui.sendButton.Importance = widget.HighImportance // Blue/primary color when enabled
+
 	ui.saveButton = widget.NewButtonWithIcon("Save", theme.DocumentSaveIcon(), ui.onSaveButtonTapped)
+	ui.saveButton.Importance = widget.MediumImportance // Secondary color when enabled
+
+	ui.clearButton = widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), ui.onClearButtonTapped)
+	ui.clearButton.Importance = widget.MediumImportance // Medium importance like other utility functions
+
 	ui.cancelButton = widget.NewButtonWithIcon("Cancel", theme.CancelIcon(), ui.onCancelButtonTapped)
+	ui.cancelButton.Importance = widget.MediumImportance
+
 	ui.settingsButton = widget.NewButtonWithIcon("Settings", theme.SettingsIcon(), ui.onSettingsButtonTapped)
+	ui.settingsButton.Importance = widget.MediumImportance // Medium importance like other utility functions
+
+	ui.quitButton = widget.NewButtonWithIcon("Quit", theme.LogoutIcon(), func() {
+		ui.window.Close()
+	})
+	ui.quitButton.Importance = widget.MediumImportance
+
 	ui.cancelButton.Hide()
-	ui.disableUtilityButtons()
+
+	// Set initial button states
+	ui.sendButton.Disable() // Will be enabled when input is provided
+	ui.clearButton.Enable() // Always allow session deletion
+	ui.saveButton.Disable() // Will be enabled when there are messages to save
 }
 
 // initProviderUI initializes provider-related UI components
@@ -292,7 +313,7 @@ func (ui *ChatUI) loadCurrentSession() error {
 
 	// No existing sessions, create a new one
 	ui.currentSession = ui.createNewSessionWithDefaults(
-		generateDefaultSessionName(),
+		ui.generateDefaultSessionName(),
 		"",
 	)
 	ui.autoSaveCurrentSession()
@@ -330,8 +351,8 @@ func (ui *ChatUI) onSendButtonTapped() {
 	ui.queryInProgress = true
 	ui.updateSendButtonState()
 
-	// Add user message to UI and session
-	ui.addMessageCard(query, true, true)
+	// Add user message to UI only (don't save to history yet)
+	ui.addMessageCard(query, true, false)
 	ui.inputField.SetText("")
 
 	ui.scrollContainer.ScrollToBottom()
@@ -343,7 +364,7 @@ func (ui *ChatUI) onSendButtonTapped() {
 
 	// Build prompt with history
 	fullPrompt := ui.buildPromptWithHistory(query, ui.currentSession.MaxMessages)
-	go ui.sendMessageToLLM(ctx, selectedModel, fullPrompt)
+	go ui.sendMessageToLLM(ctx, selectedModel, fullPrompt, query)
 }
 
 func (ui *ChatUI) onClearButtonTapped() {
@@ -632,9 +653,30 @@ func (ui *ChatUI) extractModelNames(models []models.Model) []string {
 	return modelNames
 }
 
-// generateDefaultSessionName creates a default session name with timestamp
-func generateDefaultSessionName() string {
-	return fmt.Sprintf("Session %s", time.Now().Format("15:04"))
+// generateDefaultSessionName creates a default session name with incremental counter
+func (ui *ChatUI) generateDefaultSessionName() string {
+	// If no sessions exist, always start with "Session 1"
+	if len(ui.sessions) == 0 {
+		return "Session 1"
+	}
+
+	// Find the highest existing session number
+	maxNumber := 0
+	for _, session := range ui.sessions {
+		// Parse session names like "Session 1", "Session 2", etc.
+		if strings.HasPrefix(session.Name, "Session ") {
+			numberStr := strings.TrimPrefix(session.Name, "Session ")
+			if number, err := strconv.Atoi(numberStr); err == nil {
+				if number > maxNumber {
+					maxNumber = number
+				}
+			}
+		}
+	}
+
+	// Next session number
+	nextNumber := maxNumber + 1
+	return fmt.Sprintf("Session %d", nextNumber)
 }
 
 func (ui *ChatUI) calculateModelSelectWidth() float32 {
@@ -693,7 +735,8 @@ func (ui *ChatUI) addMessageCard(content string, isUserMessage, saveToHistory bo
 
 	messageCard := ui.createMessageCardWithTimestamp(title, content, time.Now())
 	ui.chatContainer.Add(messageCard)
-	ui.enableUtilityButtons()
+	ui.clearButton.Enable()    // Always enable delete
+	ui.updateSaveButtonState() // Update save button based on messages
 
 	if saveToHistory {
 		message := models.NewChatMessage(sender, content)
@@ -720,7 +763,8 @@ func (ui *ChatUI) addMessageCardFromChatMessage(msg models.ChatMessage, saveToHi
 
 	messageCard := ui.createMessageCardWithTimestamp(title, msg.Content, msg.Timestamp)
 	ui.chatContainer.Add(messageCard)
-	ui.enableUtilityButtons()
+	ui.clearButton.Enable()    // Always enable delete
+	ui.updateSaveButtonState() // Update save button based on messages
 
 	if saveToHistory {
 		ui.currentSession.AddMessage(msg)
@@ -735,15 +779,12 @@ func (ui *ChatUI) addMessageCardFromChatMessage(msg models.ChatMessage, saveToHi
 	return messageCard
 }
 
-func (ui *ChatUI) enableUtilityButtons() {
-	ui.clearButton.Enable()
-	ui.saveButton.Enable()
-}
-
-func (ui *ChatUI) disableUtilityButtons() {
-	ui.sendButton.Disable()
-	ui.clearButton.Disable()
-	ui.saveButton.Disable()
+func (ui *ChatUI) updateSaveButtonState() {
+	if len(ui.currentSession.Messages) > 0 {
+		ui.saveButton.Enable()
+	} else {
+		ui.saveButton.Disable()
+	}
 }
 
 func (ui *ChatUI) updateSendButtonState() {
@@ -791,12 +832,6 @@ func (ui *ChatUI) handleLLMResponseError(err error) {
 	ui.clearProcessingStatus()
 }
 
-func (ui *ChatUI) createQuitButton() *widget.Button {
-	return widget.NewButtonWithIcon("Quit", theme.LogoutIcon(), func() {
-		ui.window.Close()
-	})
-}
-
 func (ui *ChatUI) buildPromptWithHistory(newUserMessage string, maxMessages int) string {
 	var prompt strings.Builder
 	prompt.WriteString("You are a helpful assistant.\n\n")
@@ -822,7 +857,11 @@ func (ui *ChatUI) buildPromptWithHistory(newUserMessage string, maxMessages int)
 }
 
 // sendMessageToLLM handles the streaming LLM response
-func (ui *ChatUI) sendMessageToLLM(ctx context.Context, selectedModel, query string) {
+func (ui *ChatUI) sendMessageToLLM(ctx context.Context, selectedModel, query, userMessage string) {
+	// First, add the user message to session history
+	userMsg := models.NewChatMessage("user", userMessage)
+	ui.currentSession.AddMessage(userMsg)
+
 	var card *widget.Card
 	llmResponse := ""
 	var llmMessage *models.ChatMessage
@@ -982,7 +1021,7 @@ func (ui *ChatUI) onNewSessionTapped() {
 
 	// Create new session with config defaults (no specific model preference initially)
 	newSession := ui.createNewSessionWithDefaults(
-		generateDefaultSessionName(),
+		ui.generateDefaultSessionName(),
 		"", // No specific model preference - will use global selection
 	)
 
@@ -1051,12 +1090,9 @@ func (ui *ChatUI) onSessionSelected(id widget.ListItemID) {
 	// Update model selection based on session preference or load global default
 	ui.updateModelSelectionForSession()
 
-	// Enable utility buttons if session has messages
-	if len(ui.currentSession.Messages) > 0 {
-		ui.enableUtilityButtons()
-	} else {
-		ui.disableUtilityButtons()
-	}
+	// Always enable delete button, conditionally enable save button
+	ui.clearButton.Enable()
+	ui.updateSaveButtonState()
 
 	ui.scrollContainer.ScrollToBottom()
 
@@ -1113,11 +1149,14 @@ func (ui *ChatUI) deleteCurrentSession() {
 		return
 	}
 
+	// Update the local sessions list to reflect the deletion
+	ui.sessions = sessions
+
 	// If no sessions remain, create a new session
 	if len(sessions) == 0 {
 		ui.logger.Info("No sessions remaining, creating new session")
 		newSession := ui.createNewSessionWithDefaults(
-			generateDefaultSessionName(),
+			ui.generateDefaultSessionName(), // This will now return "Session 1" since ui.sessions is empty
 			ui.currentSession.Model,
 		)
 		ui.currentSession = newSession
@@ -1160,12 +1199,9 @@ func (ui *ChatUI) deleteCurrentSession() {
 		}
 	}()
 
-	// Enable utility buttons if the current session has messages
-	if len(ui.currentSession.Messages) > 0 {
-		ui.enableUtilityButtons()
-	} else {
-		ui.disableUtilityButtons()
-	}
+	// Always enable delete button, conditionally enable save button based on messages
+	ui.clearButton.Enable()
+	ui.updateSaveButtonState()
 
 	ui.window.Content().Refresh()
 	ui.logger.Info("Session deleted successfully", "deleted_session_id", sessionID, "current_session_id", ui.currentSession.ID)
@@ -1208,12 +1244,9 @@ func (ui *ChatUI) loadCurrentSessionMessages() {
 		ui.setModelSelectWithoutCallback(globalModel)
 	}
 
-	// Enable utility buttons if session has messages
-	if len(ui.currentSession.Messages) > 0 {
-		ui.enableUtilityButtons()
-	} else {
-		ui.disableUtilityButtons()
-	}
+	// Always enable delete button, conditionally enable save button
+	ui.clearButton.Enable()
+	ui.updateSaveButtonState()
 
 	ui.chatContainer.Refresh()
 	if ui.scrollContainer != nil {
