@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 
+	"github.com/ashprao/ollamachat/internal/constants"
 	"github.com/ashprao/ollamachat/internal/models"
 )
 
@@ -66,21 +67,21 @@ type StorageConfig struct {
 func NewDefaultAppPreferences() AppPreferences {
 	return AppPreferences{
 		// UI Preferences
-		WindowWidth:      600,
-		WindowHeight:     700,
+		WindowWidth:      constants.DefaultWindowWidth,
+		WindowHeight:     constants.DefaultWindowHeight,
 		Theme:            "auto",
-		FontSize:         12,
+		FontSize:         constants.DefaultFontSize,
 		MaxHistoryLength: 100,
 
 		// Chat Preferences
-		DefaultModel:    "llama3.2:latest",
-		DefaultProvider: "ollama",
+		DefaultModel:    constants.DefaultModelName,
+		DefaultProvider: constants.DefaultProvider,
 		AutoSaveHistory: true,
 		EnableMarkdown:  true,
 		ShowTimestamps:  false,
 
 		// Advanced Preferences
-		MaxContextLength:  10,
+		MaxContextLength:  constants.DefaultMaxMessages,
 		EnableToolCalling: false,
 		EnableMCPServers:  false,
 		EnableAgents:      false,

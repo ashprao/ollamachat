@@ -5,6 +5,8 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"github.com/ashprao/ollamachat/internal/constants"
 )
 
 // ComponentFactory provides reusable UI components
@@ -154,8 +156,8 @@ type UIMetrics struct {
 // GetStandardMetrics returns standard UI measurements
 func (cf *ComponentFactory) GetStandardMetrics() UIMetrics {
 	return UIMetrics{
-		DefaultWindowWidth:     600,
-		DefaultWindowHeight:    700,
+		DefaultWindowWidth:     float32(constants.DefaultWindowWidth),
+		DefaultWindowHeight:    float32(constants.DefaultWindowHeight),
 		DefaultScrollMinWidth:  400,
 		DefaultScrollMinHeight: 300,
 		DefaultButtonSpacing:   5,

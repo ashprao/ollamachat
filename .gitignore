@@ -43,3 +43,5 @@ Thumbs.db
 # Dependency files in the vendor directory
 vendor/
 data
+configs/*
+data/*

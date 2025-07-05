@@ -7,18 +7,46 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/theme"
 
 	"github.com/ashprao/ollamachat/internal/config"
+	"github.com/ashprao/ollamachat/internal/constants"
 	"github.com/ashprao/ollamachat/internal/llm"
 	"github.com/ashprao/ollamachat/internal/storage"
 	"github.com/ashprao/ollamachat/internal/ui"
 	"github.com/ashprao/ollamachat/pkg/logger"
 )
 
+// CustomTheme wraps the default theme to apply custom font size
+type CustomTheme struct {
+	fyne.Theme
+	fontSize int
+}
+
+// Size returns the custom font size for text
+func (t *CustomTheme) Size(name fyne.ThemeSizeName) float32 {
+	switch name {
+	case theme.SizeNameText:
+		if t.fontSize > 0 {
+			return float32(t.fontSize)
+		}
+	}
+	return t.Theme.Size(name)
+}
+
+// NewCustomTheme creates a theme with custom font size
+func NewCustomTheme(fontSize int) fyne.Theme {
+	return &CustomTheme{
+		Theme:    theme.DefaultTheme(),
+		fontSize: fontSize,
+	}
+}
+
 // App represents the main application container with all dependencies
 type App struct {
 	// Core dependencies
 	config          *config.Config
+	configPath      string // Add config path for saving
 	logger          *logger.Logger
 	provider        llm.Provider
 	providerFactory *llm.DefaultProviderFactory
@@ -89,15 +117,15 @@ func New(appConfig AppConfig) (*App, error) {
 				LogLevel: "info",
 			},
 			LLM: config.LLMConfig{
-				Provider: "ollama",
+				Provider: constants.DefaultProvider,
 				Ollama: config.OllamaConfig{
 					BaseURL:      "http://localhost:11434",
-					DefaultModel: "llama3.2:latest",
+					DefaultModel: constants.DefaultModelName,
 				},
 			},
 			UI: config.UIConfig{
-				WindowWidth:  800, // Increased from 600 to accommodate session sidebar
-				WindowHeight: 700,
+				WindowWidth:  constants.DefaultWindowWidth, // Increased from 600 to accommodate session sidebar
+				WindowHeight: constants.DefaultWindowHeight,
 			},
 		}
 	}
@@ -162,18 +190,29 @@ func New(appConfig AppConfig) (*App, error) {
 		logger.Warn("Storage ping failed", "error", err)
 	}
 
-	// Create ChatUI with provider information
-	chatUI := ui.NewChatUI(window, provider, stor, logger, providerFactory.GetAvailableProviders(), providerType)
-
+	// Create app instance first (without chatUI)
 	app := &App{
 		config:          cfg,
+		configPath:      configPath, // Store config path for saving
 		logger:          logger,
 		provider:        provider,
 		providerFactory: providerFactory,
 		storage:         stor,
 		fyneApp:         fyneApp,
 		window:          window,
-		chatUI:          chatUI,
+	}
+
+	// Create ChatUI with provider information and app reference
+	chatUI := ui.NewChatUI(window, provider, stor, logger, providerFactory.GetAvailableProviders(), providerType, cfg, app)
+
+	// Set the chatUI in the app
+	app.chatUI = chatUI
+
+	// Apply font size from config
+	if cfg.UI.FontSize > 0 {
+		// Set custom theme with font size
+		fyneApp.Settings().SetTheme(NewCustomTheme(cfg.UI.FontSize))
+		logger.Info("Applied custom font size", "size", cfg.UI.FontSize)
 	}
 
 	logger.Info("Application initialization completed successfully")
@@ -297,7 +336,101 @@ func (a *App) GetAvailableProviders() []string {
 	return a.providerFactory.GetAvailableProviders()
 }
 
-// GetCurrentProviderType returns the current provider type
+// GetCurrentProviderType returns the currently configured provider type
 func (a *App) GetCurrentProviderType() string {
-	return a.providerFactory.GetCurrentProvider()
+	return a.config.LLM.Provider
+}
+
+// ReloadConfigFromFile reloads configuration from file and updates current settings
+func (a *App) ReloadConfigFromFile(configPath string) error {
+	a.logger.Info("Reloading configuration from file", "path", configPath)
+
+	// Load new configuration
+	newConfig, err := config.ReloadConfig(configPath)
+	if err != nil {
+		a.logger.Error("Failed to reload configuration", "error", err)
+		return fmt.Errorf("failed to reload configuration: %w", err)
+	}
+
+	// Validate new configuration
+	if err := newConfig.ValidateConfig(); err != nil {
+		a.logger.Error("New configuration validation failed", "error", err)
+		return fmt.Errorf("configuration validation failed: %w", err)
+	}
+
+	// Update logger level if it changed
+	if newConfig.App.LogLevel != a.config.App.LogLevel {
+		a.logger.Info("Updating log level", "old", a.config.App.LogLevel, "new", newConfig.App.LogLevel)
+		// Note: Logger level change would require recreating the logger
+		// For now, we'll just log the change
+	}
+
+	// Update window size if it changed
+	if newConfig.UI.WindowWidth != a.config.UI.WindowWidth ||
+		newConfig.UI.WindowHeight != a.config.UI.WindowHeight {
+		a.logger.Info("Updating window size",
+			"old_size", fmt.Sprintf("%dx%d", a.config.UI.WindowWidth, a.config.UI.WindowHeight),
+			"new_size", fmt.Sprintf("%dx%d", newConfig.UI.WindowWidth, newConfig.UI.WindowHeight))
+		a.window.Resize(fyne.NewSize(
+			float32(newConfig.UI.WindowWidth),
+			float32(newConfig.UI.WindowHeight),
+		))
+	}
+
+	// Check if provider changed
+	if newConfig.LLM.Provider != a.config.LLM.Provider {
+		a.logger.Info("Provider configuration changed",
+			"old", a.config.LLM.Provider,
+			"new", newConfig.LLM.Provider)
+
+		// Switch to new provider
+		if err := a.SwitchProvider(newConfig.LLM.Provider); err != nil {
+			a.logger.Error("Failed to switch to new provider", "error", err)
+			return fmt.Errorf("failed to switch provider: %w", err)
+		}
+	}
+
+	// Update the configuration
+	a.config = newConfig
+
+	// Update ChatUI with new config
+	if a.chatUI != nil {
+		a.chatUI.UpdateConfig(newConfig)
+	}
+
+	a.logger.Info("Configuration reloaded successfully")
+	return nil
+}
+
+// SaveConfig saves the current configuration to file
+func (a *App) SaveConfig() error {
+	a.logger.Info("Saving configuration to file", "path", a.configPath)
+
+	if err := a.config.SaveConfig(a.configPath); err != nil {
+		a.logger.Error("Failed to save configuration", "error", err)
+		return fmt.Errorf("failed to save configuration: %w", err)
+	}
+
+	a.logger.Info("Configuration saved successfully")
+	return nil
+}
+
+// GetConfigPath returns the current config file path
+func (a *App) GetConfigPath() string {
+	return a.configPath
+}
+
+// UpdateWindowSize updates the window size immediately
+func (a *App) UpdateWindowSize(width, height int) {
+	a.logger.Info("Updating window size", "width", width, "height", height)
+	a.window.Resize(fyne.NewSize(float32(width), float32(height)))
+}
+
+// UpdateFontSize updates the font size by applying a new theme
+func (a *App) UpdateFontSize(fontSize int) {
+	a.logger.Info("Updating font size", "size", fontSize)
+	if fontSize > 0 {
+		a.fyneApp.Settings().SetTheme(NewCustomTheme(fontSize))
+		a.logger.Info("Applied new font size theme", "size", fontSize)
+	}
 }
