@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -694,7 +695,7 @@ func (ui *ChatUI) calculateModelSelectWidth() float32 {
 }
 
 // createMessageCardWithTimestamp creates a message card with consistent styling
-func (ui *ChatUI) createMessageCardWithTimestamp(title, content string, timestamp time.Time) *widget.Card {
+func (ui *ChatUI) createMessageCardWithTimestamp(title, content string, timestamp time.Time, showCopy bool) *widget.Card {
 	richText := widget.NewRichTextFromMarkdown(content)
 	richText.Wrapping = fyne.TextWrapWord
 
@@ -702,6 +703,7 @@ func (ui *ChatUI) createMessageCardWithTimestamp(title, content string, timestam
 	titleLabel := widget.NewLabel(title)
 	titleLabel.TextStyle = fyne.TextStyle{Bold: true}
 
+	var header *fyne.Container
 	if ui.config.UI.ShowTimestamps {
 		// Create timestamp label with smaller, muted style
 		timestampStr := timestamp.Format(TimestampFormat)
@@ -710,30 +712,46 @@ func (ui *ChatUI) createMessageCardWithTimestamp(title, content string, timestam
 		timestampLabel.Importance = widget.LowImportance
 
 		// Create header with title and timestamp
-		header := container.NewHBox(
+		header = container.NewHBox(
 			titleLabel,
 			widget.NewLabel("•"), // Separator
 			timestampLabel,
 		)
-
-		return widget.NewCard("", "", container.NewVBox(header, richText))
 	} else {
-		// Create card without timestamp
-		return widget.NewCard("", "", container.NewVBox(titleLabel, richText))
+		header = container.NewHBox(titleLabel)
 	}
+
+	// Add copy button if showCopy is true
+	var cardContent *fyne.Container
+	if showCopy {
+		copyBtn := widget.NewButtonWithIcon("Copy", theme.ContentCopyIcon(), func() {
+			clip := ui.window.Clipboard()
+			clip.SetContent(content)
+		})
+		copyBtn.Importance = widget.LowImportance // Low importance for utility actions
+		headerWithCopy := container.NewHBox(header, layout.NewSpacer(), copyBtn)
+		cardContent = container.NewVBox(headerWithCopy, richText)
+	} else {
+		cardContent = container.NewVBox(header, richText)
+	}
+
+	return widget.NewCard("", "", cardContent)
 }
 
 func (ui *ChatUI) addMessageCard(content string, isUserMessage, saveToHistory bool) *widget.Card {
 	var title, sender string
+	var showCopy bool
 	if isUserMessage {
 		title = UserMessageTitle
 		sender = "user"
+		showCopy = false //
 	} else {
 		title = LLMMessageTitle
 		sender = "llm"
+		showCopy = true // Only show copy button for LLM messages
 	}
 
-	messageCard := ui.createMessageCardWithTimestamp(title, content, time.Now())
+	messageCard := ui.createMessageCardWithTimestamp(title, content, time.Now(), showCopy)
 	ui.chatContainer.Add(messageCard)
 	ui.clearButton.Enable()    // Always enable delete
 	ui.updateSaveButtonState() // Update save button based on messages
@@ -755,13 +773,16 @@ func (ui *ChatUI) addMessageCard(content string, isUserMessage, saveToHistory bo
 // addMessageCardFromChatMessage creates a message card from a ChatMessage with optional timestamp
 func (ui *ChatUI) addMessageCardFromChatMessage(msg models.ChatMessage, saveToHistory bool) *widget.Card {
 	var title string
+	var showCopy bool
 	if msg.Sender == "user" {
 		title = UserMessageTitle
+		showCopy = false
 	} else {
 		title = LLMMessageTitle
+		showCopy = true // Only show copy button for LLM messages
 	}
 
-	messageCard := ui.createMessageCardWithTimestamp(title, msg.Content, msg.Timestamp)
+	messageCard := ui.createMessageCardWithTimestamp(title, msg.Content, msg.Timestamp, showCopy)
 	ui.chatContainer.Add(messageCard)
 	ui.clearButton.Enable()    // Always enable delete
 	ui.updateSaveButtonState() // Update save button based on messages
