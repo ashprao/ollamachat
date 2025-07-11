@@ -27,7 +27,16 @@ Shout out to [Fyne](https://fyne.io/) for providing a powerful and intuitive GUI
    ```
    Ensure that your Go bin directory (usually `$HOME/go/bin`) is in your `PATH` so you can run `fyne-cross` from the terminal.
 
-4. **Build the Project**: Navigate to the project directory in your terminal and use one of the following methods:
+4. **Install OllamaChat Executable (Alternative Quick Install):**  
+   If you have Go installed, you can quickly install the OllamaChat executable directly with:
+
+   ```bash
+   go install github.com/ashprao/ollamachat/cmd/ollamachat@latest
+   ```
+
+   This will place the `ollamachat` binary in your Go bin directory (typically `$HOME/go/bin`), which should be in your `PATH`.
+
+5. **Build the Project**: Navigate to the project directory in your terminal and use one of the following methods:
    
    **Option 1 - Quick development build using Makefile:**
    ```bash
@@ -42,7 +51,7 @@ Shout out to [Fyne](https://fyne.io/) for providing a powerful and intuitive GUI
    ```bash
    go build
    ```
-5. **Run the Program**: Use `./ollamachat` to start the application.
+6. **Run the Program**: Use `./ollamachat` to start the application.
 
 ### Using the Makefile
 

@@ -352,8 +352,12 @@ func (ui *ChatUI) onSendButtonTapped() {
 	ui.queryInProgress = true
 	ui.updateSendButtonState()
 
+	// Capture the session and chat container at the time of sending
+	session := ui.currentSession
+	chatContainer := ui.chatContainer
+
 	// Add user message to UI only (don't save to history yet)
-	ui.addMessageCard(query, true, false)
+	ui.addMessageCard(query, true, true, &ui.currentSession)
 	ui.inputField.SetText("")
 
 	ui.scrollContainer.ScrollToBottom()
@@ -365,7 +369,7 @@ func (ui *ChatUI) onSendButtonTapped() {
 
 	// Build prompt with history
 	fullPrompt := ui.buildPromptWithHistory(query, ui.currentSession.MaxMessages)
-	go ui.sendMessageToLLM(ctx, selectedModel, fullPrompt, query)
+	go ui.sendMessageToLLM(ctx, selectedModel, fullPrompt, query, session, chatContainer)
 }
 
 func (ui *ChatUI) onClearButtonTapped() {
@@ -414,7 +418,7 @@ func (ui *ChatUI) onSaveButtonTapped() {
 func (ui *ChatUI) onCancelButtonTapped() {
 	if ui.cancelFunc != nil {
 		ui.cancelFunc()
-		ui.addMessageCard("\n\n**Request canceled**", false, false)
+		ui.addMessageCard("\n\n**Request canceled**", false, false, &ui.currentSession)
 		ui.clearProcessingStatus()
 	}
 
@@ -738,7 +742,7 @@ func (ui *ChatUI) createMessageCardWithTimestamp(title, content string, timestam
 	return widget.NewCard("", "", cardContent)
 }
 
-func (ui *ChatUI) addMessageCard(content string, isUserMessage, saveToHistory bool) *widget.Card {
+func (ui *ChatUI) addMessageCard(content string, isUserMessage, saveToHistory bool, session *models.ChatSession) *widget.Card {
 	var title, sender string
 	var showCopy bool
 	if isUserMessage {
@@ -758,7 +762,7 @@ func (ui *ChatUI) addMessageCard(content string, isUserMessage, saveToHistory bo
 
 	if saveToHistory {
 		message := models.NewChatMessage(sender, content)
-		ui.currentSession.AddMessage(message)
+		session.AddMessage(message)
 
 		// Auto-save session
 		ui.autoSaveCurrentSession()
@@ -848,7 +852,7 @@ func (ui *ChatUI) updateRichText(card *widget.Card, content string) {
 
 func (ui *ChatUI) handleLLMResponseError(err error) {
 	if err != nil && err.Error() != "context canceled" {
-		ui.addMessageCard("\n**Error:** "+err.Error(), false, false)
+		ui.addMessageCard("\n**Error:** "+err.Error(), false, false, &ui.currentSession)
 	}
 	ui.clearProcessingStatus()
 }
@@ -878,11 +882,7 @@ func (ui *ChatUI) buildPromptWithHistory(newUserMessage string, maxMessages int)
 }
 
 // sendMessageToLLM handles the streaming LLM response
-func (ui *ChatUI) sendMessageToLLM(ctx context.Context, selectedModel, query, userMessage string) {
-	// First, add the user message to session history
-	userMsg := models.NewChatMessage("user", userMessage)
-	ui.currentSession.AddMessage(userMsg)
-
+func (ui *ChatUI) sendMessageToLLM(ctx context.Context, selectedModel, query, userMessage string, session models.ChatSession, chatContainer *fyne.Container) {
 	var card *widget.Card
 	llmResponse := ""
 	var llmMessage *models.ChatMessage
@@ -894,35 +894,41 @@ func (ui *ChatUI) sendMessageToLLM(ctx context.Context, selectedModel, query, us
 	}
 
 	err := ui.provider.SendQueryWithOptions(ctx, selectedModel, query, llm.QueryOptions{
-		Temperature: ui.currentSession.Temperature,
+		Temperature: session.Temperature,
 		MaxTokens:   ui.getMaxTokensFromConfig(),
 	}, func(chunk string, newStream bool) {
+		if ui.currentSession.ID != session.ID {
+			return
+		}
+
 		autoScroll := shouldAutoScroll()
 		if newStream {
 			llmResponse = chunk
-			card = ui.addMessageCard(llmResponse, false, false)
-			// Create the LLM message and add it to session
+			card = ui.addMessageCard(llmResponse, false, false, &ui.currentSession)
+			// Create the LLM message and add it to currentSession
 			llmMessage = &models.ChatMessage{
 				Sender:    "llm",
 				Content:   llmResponse,
 				Timestamp: time.Now(),
 			}
 			ui.currentSession.AddMessage(*llmMessage)
+			ui.autoSaveCurrentSession()
 		} else {
 			llmResponse += chunk
 			ui.updateRichText(card, llmResponse)
 
-			// Update the last message in the session
+			// Update the last message in the currentSession
 			if len(ui.currentSession.Messages) > 0 {
 				lastIdx := len(ui.currentSession.Messages) - 1
 				if ui.currentSession.Messages[lastIdx].Sender == "llm" {
 					ui.currentSession.Messages[lastIdx].Content = llmResponse
+					ui.autoSaveCurrentSession()
 				}
 			}
 		}
 
 		card.Refresh()
-		ui.chatContainer.Refresh()
+		chatContainer.Refresh()
 		if autoScroll {
 			ui.scrollContainer.ScrollToBottom()
 		}
@@ -1068,6 +1074,11 @@ func (ui *ChatUI) onNewSessionTapped() {
 
 // onSessionSelected handles switching to a selected session
 func (ui *ChatUI) onSessionSelected(id widget.ListItemID) {
+	if ui.cancelFunc != nil {
+		ui.cancelFunc() // Cancel any ongoing query before switching sessions
+		ui.cancelFunc = nil
+	}
+
 	if id >= len(ui.sessions) {
 		return
 	}
@@ -1105,7 +1116,7 @@ func (ui *ChatUI) onSessionSelected(id widget.ListItemID) {
 	// Load session messages into UI
 	for _, msg := range ui.currentSession.Messages {
 		isUserMessage := msg.Sender == "user"
-		ui.addMessageCard(msg.Content, isUserMessage, false)
+		ui.addMessageCard(msg.Content, isUserMessage, false, &ui.currentSession)
 	}
 
 	// Update model selection based on session preference or load global default
@@ -1195,7 +1206,7 @@ func (ui *ChatUI) deleteCurrentSession() {
 	// Load session messages into UI
 	for _, msg := range ui.currentSession.Messages {
 		isUserMessage := msg.Sender == "user"
-		ui.addMessageCard(msg.Content, isUserMessage, false)
+		ui.addMessageCard(msg.Content, isUserMessage, false, &ui.currentSession)
 	}
 
 	// Update model selection if session has a saved model
